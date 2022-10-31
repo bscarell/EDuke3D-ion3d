@@ -4,14 +4,15 @@
 #ifndef build_interface_layer_
 #define build_interface_layer_ WIN
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+#include "compat.h"
+#include "windows_inc.h"
 
 extern uint32_t maxrefreshfreq;
 
 extern int32_t glusecds;
 
 extern char di_disabled;
+extern char forcegl;
 
 HWND win_gethwnd(void);
 HINSTANCE win_gethinstance(void);
@@ -23,9 +24,9 @@ static inline void idle_waitevent(void)
     idle_waitevent_timeout(100);
 }
 
-static inline void idle(void)
+static inline void idle(int const msec = 1)
 {
-    idle_waitevent();
+    Sleep(msec);
 }
 
 #include "baselayer.h"

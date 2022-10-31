@@ -30,35 +30,35 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "build.h"
 #include "editor.h"
 
-#define MAXQUOTES 2048
+#define MAXQUOTES 16384
 #define MAXQUOTELEN 128
 
 typedef int32_t instype;
 typedef int32_t ofstype;
 
-extern char *ScriptQuotes[MAXQUOTES+1], *ScriptQuoteRedefinitions[MAXQUOTES+1];
+extern char *apStrings[MAXQUOTES+1], *apXStrings[MAXQUOTES+1];
 extern int32_t g_numQuoteRedefinitions;
 
 extern int32_t VM_Execute(int32_t once);
-extern void VM_OnEvent(register int32_t iEventID, register int32_t iActor);
+extern void VM_OnEvent(int32_t iEventID, int32_t spriteNum);
 
 extern void VM_ScriptInfo(void);
 extern void VM_Disasm(ofstype beg, int32_t size);
 
-extern int32_t Gv_NewVar(const char *pszLabel, intptr_t lValue, uint32_t dwFlags);
-extern int32_t Gv_NewArray(const char *pszLabel, void *arrayptr, int32_t asize, uint32_t dwFlags);
+void Gv_NewVar(const char *pszLabel, intptr_t lValue, uint32_t dwFlags);
+void Gv_NewArray(const char *pszLabel, void *arrayptr, intptr_t asize, uint32_t dwFlags);
 extern void Gv_Init(void);
 
-extern int32_t __fastcall Gv_GetVarX(register int32_t id);
-extern void __fastcall Gv_SetVarX(register int32_t id, register int32_t lValue);
-extern int32_t __fastcall Gv_GetVarN(register int32_t id);  // 'N' for "no side-effects"... vars and locals only!
+extern int32_t __fastcall Gv_GetVar(int32_t id);
+extern void __fastcall Gv_SetVar(int32_t id, int32_t lValue);
+extern int32_t __fastcall Gv_GetVarN(int32_t id);  // 'N' for "no side-effects"... vars and locals only!
 
 extern void SetGamePalette(int32_t);
 
 extern int32_t *constants, constants_allocsize;
 extern int32_t g_numSavedConstants;
 
-extern instype *script ,*insptr;
+extern instype *apScript ,*insptr;
 extern int32_t *labelval;
 extern uint8_t *labeltype;
 extern int32_t g_numLabels, g_numDefaultLabels;
@@ -93,6 +93,7 @@ enum GameEvent_t {
     EVENT_PRELOADMAP,
     EVENT_PRESAVEMAP,
     EVENT_PREDRAW2DSCREEN,
+    EVENT_GETNUMBER,
     MAXEVENTS
 };
 
@@ -124,20 +125,21 @@ enum GamevarFlags_t {
     GAMEVAR_SPECIAL    = 0x00040000, // flag for structure member shortcut vars
 };
 
-enum GamearrayFlags_t {
-    MAXGAMEARRAYS      = (MAXGAMEVARS>>2), // must be strictly smaller than MAXGAMEVARS
-    MAXARRAYLABEL      = MAXVARLABEL,
+enum GamearrayFlags_t
+{
+    MAXGAMEARRAYS = (MAXGAMEVARS >> 2),  // must be strictly smaller than MAXGAMEVARS
+    MAXARRAYLABEL = MAXVARLABEL,
 
     GAMEARRAY_READONLY = 0x00001000,
     GAMEARRAY_WARN     = 0x00002000,
 
-    GAMEARRAY_NORMAL   = 0x00004000,
-    GAMEARRAY_OFCHAR   = 0x00000001,
-    GAMEARRAY_OFSHORT  = 0x00000002,
-    GAMEARRAY_OFINT    = 0x00000004,
-    GAMEARRAY_TYPE_MASK = GAMEARRAY_OFCHAR|GAMEARRAY_OFSHORT|GAMEARRAY_OFINT,
+    GAMEARRAY_NORMAL    = 0x00004000,
+    GAMEARRAY_UINT8     = 0x00000001,
+    GAMEARRAY_INT16     = 0x00000002,
+    GAMEARRAY_INT32     = 0x00000004,
+    GAMEARRAY_TYPE_MASK = GAMEARRAY_UINT8 | GAMEARRAY_INT16 | GAMEARRAY_INT32,
 
-    GAMEARRAY_RESET    = 0x00000008,
+    GAMEARRAY_RESET = 0x00000008,
 
     GAMEARRAY_VARSIZE = 0x00000020,
     GAMEARRAY_STRIDE2 = 0x00000040,
@@ -174,7 +176,7 @@ extern int32_t m32_sortvar1, m32_sortvar2;
 
 //extern int32_t g_scriptDebug;
 
-extern int32_t g_numQuoteRedefinitions;
+
 
 extern hashtable_t h_gamevars;
 extern hashtable_t h_arrays;
@@ -228,7 +230,7 @@ extern int32_t mousyplc;
 
 #define M32_LOCAL_ARRAY_ID 0
 
-#define M32_PRINTERROR(Text, ...) OSD_Printf(OSD_ERROR "Line %d, %s: " Text "\n", g_errorLineNum, keyw[g_tw], ## __VA_ARGS__)
+#define M32_PRINTERROR(Text, ...) OSD_Printf("%sLine %d, %s: " Text "\n", osd->draw.errorfmt, g_errorLineNum, keyw[g_tw], ## __VA_ARGS__)
 #define M32_ERROR(Text, ...) do { M32_PRINTERROR(Text, ## __VA_ARGS__); vm.flags |= VMFLAG_ERROR; } while (0)
 
 

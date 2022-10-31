@@ -1,9 +1,17 @@
 #ifndef HIGHTILE_PRIV_H
 #define HIGHTILE_PRIV_H
 
+#include "build.h"
+#include "palette.h"
+#include "vec.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct { uint8_t r, g, b, a; } coltype;
+typedef struct { float r, g, b, a; } coltypef;
+EXTERN int32_t globalnoeffect;
 
 struct hicskybox_t {
     char *face[6];
@@ -15,10 +23,19 @@ typedef struct hicreplc_t {
     struct hicskybox_t *skybox;
     vec2f_t scale;
     float alphacut, specpower, specfactor;
-    char palnum, flags;
+    char palnum;
+    uint8_t flags, tfn;
 } hicreplctyp;
 
-extern palette_t hictinting[MAXPALOOKUPS];
+typedef uint16_t polytintflags_t;
+
+typedef struct {
+    polytintflags_t f;
+    uint8_t r, g, b;
+    uint8_t sr, sg, sb;
+} polytint_t;
+
+extern polytint_t hictinting[MAXPALOOKUPS];
 extern hicreplctyp *hicreplc[MAXTILES];
 extern int32_t hicinitcounter;
 
@@ -38,28 +55,54 @@ typedef struct texcachepic_t
     int border, depth;
 } texcachepicture;
 
-hicreplctyp * hicfindsubst(int picnum, int palnum);
-hicreplctyp * hicfindskybox(int picnum, int palnum);
+hicreplctyp * hicfindsubst(int picnum, int palnum, int nozero = 0);
+hicreplctyp * hicfindskybox(int picnum, int palnum, int nozero = 0);
+void hictinting_applypixcolor(coltype* tcol, uint8_t pal, bool no_rb_swap);
+
+void hicinit(void);
+void hicsetpalettetint(int32_t palnum, char r, char g, char b, char sr, char sg, char sb, polytintflags_t effect);
+// flags bitset: 1 = don't compress
+int32_t hicsetsubsttex(int32_t picnum, int32_t palnum, const char *filen, float alphacut,
+                       float xscale, float yscale, float specpower, float specfactor, char flags);
+int32_t hicsetskybox(int32_t picnum, int32_t palnum, char *faces[6], int32_t flags);
+int32_t hicclearsubst(int32_t picnum, int32_t palnum);
 
 static inline int have_basepal_tint(void)
 {
-    return (hictinting[MAXPALOOKUPS-1].r != 255 ||
-            hictinting[MAXPALOOKUPS-1].g != 255 ||
-            hictinting[MAXPALOOKUPS-1].b != 255);
+    polytint_t const & tint = hictinting[MAXPALOOKUPS-1];
+    return (tint.r != 255 ||
+            tint.g != 255 ||
+            tint.b != 255);
 }
 
 static inline void hictinting_apply(float *color, int32_t palnum)
 {
-    color[0] *= (float)hictinting[palnum].r * (1.f/255.f);
-    color[1] *= (float)hictinting[palnum].g * (1.f/255.f);
-    color[2] *= (float)hictinting[palnum].b * (1.f/255.f);
+    polytint_t const & tint = hictinting[palnum];
+    color[0] *= (float)tint.r * (1.f/255.f);
+    color[1] *= (float)tint.g * (1.f/255.f);
+    color[2] *= (float)tint.b * (1.f/255.f);
 }
 
 static inline void hictinting_apply_ub(uint8_t *color, int32_t palnum)
 {
-    color[0] = (uint8_t)(color[0] * (float)hictinting[palnum].r * (1.f/255.f));
-    color[1] = (uint8_t)(color[1] * (float)hictinting[palnum].g * (1.f/255.f));
-    color[2] = (uint8_t)(color[2] * (float)hictinting[palnum].b * (1.f/255.f));
+    polytint_t const & tint = hictinting[palnum];
+    color[0] = (uint8_t)(color[0] * (float)tint.r * (1.f/255.f));
+    color[1] = (uint8_t)(color[1] * (float)tint.g * (1.f/255.f));
+    color[2] = (uint8_t)(color[2] * (float)tint.b * (1.f/255.f));
+}
+
+static inline void globaltinting_apply(float *color)
+{
+    color[0] *= (float)globalr * (1.f/255.f);
+    color[1] *= (float)globalg * (1.f/255.f);
+    color[2] *= (float)globalb * (1.f/255.f);
+}
+
+static inline void globaltinting_apply_ub(uint8_t *color)
+{
+    color[0] = (uint8_t)(color[0] * (float)globalr * (1.f/255.f));
+    color[1] = (uint8_t)(color[1] * (float)globalg * (1.f/255.f));
+    color[2] = (uint8_t)(color[2] * (float)globalb * (1.f/255.f));
 }
 
 // texcacheheader cachead.flags bits
@@ -68,19 +111,24 @@ enum
     CACHEAD_NONPOW2 = 1,
     CACHEAD_HASALPHA = 2,
     CACHEAD_COMPRESSED = 4,
-    CACHEAD_NOCOMPRESS = 8,
+    CACHEAD_NODOWNSIZE = 8,
+    CACHEAD_HASFULLBRIGHT = 16,
+    CACHEAD_NPOTWALL = 32,
 };
 
 // hicreplctyp hicr->flags bits
 enum
 {
-    HICR_NOSAVE = 1,
+    HICR_NOTEXCOMPRESS = 1,
     HICR_FORCEFILTER = 2,
 
-    HICR_NOCOMPRESS = 16,
+    HICR_NODOWNSIZE = 16,
+    HICR_ARTIMMUNITY = 32,
+    HICR_INDEXED = 64,
+    HICR_NOCHT = 128,
 };
 
-// hictinting[].f / gloadtile_hi() and daskinloader() <effect> arg bits
+// hictinting[].f / gloadtile_hi() and mdloadskin() <effect> arg bits
 enum
 {
     HICTINT_GRAYSCALE = 1,
@@ -97,15 +145,27 @@ enum
 
     HICTINT_BLENDMASK = 64|128,
 
+    HICTINT_ALWAYSUSEART = 256,
+    HICTINT_NOFOGSHADE = 512,
+
     HICTINT_PRECOMPUTED = HICTINT_COLORIZE | HICTINT_BLENDMASK,
     HICTINT_IN_MEMORY = HICTINT_PRECOMPUTED | HICTINT_GRAYSCALE | HICTINT_INVERT,
 
-    HICEFFECTMASK = 255, // XXX: Xcalloc() based on this value, why?
+    HICTINT_MEMORY_COMBINATIONS = 1<<5,
 };
 
 #define GRAYSCALE_COEFF_RED 0.3
 #define GRAYSCALE_COEFF_GREEN 0.59
 #define GRAYSCALE_COEFF_BLUE 0.11
+
+static inline int32_t hicfxmask(size_t pal)
+{
+    return globalnoeffect ? 0 : (hictinting[pal].f & HICTINT_IN_MEMORY);
+}
+static inline int32_t hicfxid(size_t pal)
+{
+    return globalnoeffect ? 0 : ((hictinting[pal].f & (HICTINT_GRAYSCALE | HICTINT_INVERT | HICTINT_COLORIZE)) | ((hictinting[pal].f & HICTINT_BLENDMASK) << 3));
+}
 
 #ifdef __cplusplus
 }

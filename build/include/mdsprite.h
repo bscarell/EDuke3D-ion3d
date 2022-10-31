@@ -1,14 +1,19 @@
 #ifndef mdsprite_h_
 # define mdsprite_h_
 
+#ifdef USE_OPENGL
+#include "hightile.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#ifdef USE_OPENGL
-#include "hightile.h"
-
+#if defined(_M_IX86) || defined(_M_AMD64) || defined(__i386) || defined(__x86_64)
+#define SHIFTMOD32(a) (a)
+#else
 #define SHIFTMOD32(a) ((a)&31)
+#endif
 
 #define SHARED_MODEL_DATA int32_t mdnum, shadeoff; \
                   float scale, bscale, zadd, yoffset; \
@@ -44,7 +49,9 @@ typedef struct _mdskinmap_t
     uint8_t palette, flags, filler[2]; // Build palette number, flags the same as hicreplctyp
     int32_t skinnum, surfnum;   // Skin identifier, surface number
     char *fn;   // Skin filename
-    GLuint texid[HICEFFECTMASK+1];   // OpenGL texture numbers for effect variations
+#ifdef USE_OPENGL
+    GLuint texid[HICTINT_MEMORY_COMBINATIONS];   // OpenGL texture numbers for effect variations
+#endif
     struct _mdskinmap_t *next;
     float param, specpower, specfactor;
 } mdskinmap_t;
@@ -167,11 +174,13 @@ typedef struct
     uint16_t *vindexes;
 
     float *maxdepths;
+#ifdef USE_OPENGL
     GLuint *vbos;
     // polymer VBO names after that, allocated per surface
     GLuint *indices;
     GLuint *texcoords;
     GLuint *geometry;
+#endif
 } md3model_t;
 
 #define VOXBORDWIDTH 1 //use 0 to save memory, but has texture artifacts; 1 looks better...
@@ -180,51 +189,60 @@ typedef struct
 #if (VOXUSECHAR != 0)
 typedef struct { uint8_t x, y, z, u, v; } vert_t;
 #else
-typedef struct { uint16_t x, y, z, u, v; } vert_t;
+typedef struct
+{
+    union { struct { uint16_t x, y, z; }; vec3_u16_t xyz; };
+    union { struct { uint16_t u, v; }; vec2_u16_t uv; };
+} vert_t;
 #endif
 
 typedef struct { vert_t v[4]; } voxrect_t;
 
 typedef struct
 {
-    //WARNING: This top block is a union of md2model,md3model,voxmodel: Make sure it matches!
-    int32_t mdnum; //VOX=1, MD2=2, MD3=3. NOTE: must be first in structure!
-    int32_t shadeoff;
-    float scale, bscale, zadd;
-    uint32_t *texid;    // skins for palettes
-    int32_t flags;
+    SHARED_MODEL_DATA;
 
     //VOX specific stuff:
-    voxrect_t *quad; int32_t qcnt, qfacind[7];
+    GLfloat *vertex;
+    GLuint *index;
+    int32_t qcnt;
+
     int32_t *mytex, mytexx, mytexy;
     vec3_t siz;
     vec3f_t piv;
     int32_t is8bit;
+    uint32_t texid8bit;
+#ifdef USE_OPENGL
+    GLuint vbo, vboindex;
+#endif
 } voxmodel_t;
 
 EXTERN mdmodel_t **models;
 
-void updateanimation(md2model_t *m, const tspritetype *tspr, uint8_t lpal);
+void updateanimation(md2model_t *m, tspriteptr_t tspr, uint8_t lpal);
 int32_t mdloadskin(md2model_t *m, int32_t number, int32_t pal, int32_t surf);
 void mdinit(void);
 void freeallmodels(void);
-void clearskins(void);
-int32_t polymost_mddraw(const tspritetype *tspr);
-EXTERN void md3_vox_calcmat_common(const tspritetype *tspr, const vec3f_t *a0, float f, float mat[16]);
+void clearskins(int32_t type);
+int32_t polymost_mddraw(tspriteptr_t tspr);
+EXTERN void md3_vox_calcmat_common(tspriteptr_t tspr, const vec3f_t *a0, float f, float mat[16]);
 
 EXTERN int32_t mdpause;
 EXTERN int32_t nextmodelid;
 EXTERN voxmodel_t *voxmodels[MAXVOXELS];
 
+#ifdef USE_GLEXT
+void voxvboalloc(voxmodel_t *vm);
+void voxvbofree(voxmodel_t *vm);
+#endif
+
 void voxfree(voxmodel_t *m);
 voxmodel_t *voxload(const char *filnam);
-int32_t polymost_voxdraw(voxmodel_t *m, const tspritetype *tspr);
+int32_t polymost_voxdraw(voxmodel_t *m, tspriteptr_t const tspr);
 
 int      md3postload_polymer(md3model_t* m);
 //int32_t md_thinoutmodel(int32_t modelid, uint8_t *usedframebitmap);
 EXTERN void md_freevbos(void);
-
-#endif // defined USE_OPENGL
 
 enum {
     HUDFLAG_HIDE = 1,

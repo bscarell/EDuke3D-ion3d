@@ -7,11 +7,11 @@
 #ifndef EDUKE32_COMMON_H_
 #define EDUKE32_COMMON_H_
 
-#include "compat.h"
-#include "scriptfile.h"
 #include "cache1d.h"
+#include "compat.h"
 #include "pragmas.h"  // klabs
-#include "build.h"
+#include "scriptfile.h"
+#include "vfs.h"
 
 
 #ifdef __cplusplus
@@ -34,7 +34,7 @@ tokenlist;
 
 typedef struct
 {
-    CACHE1D_FIND_REC *finddirs, *findfiles;
+    BUILDVFS_FIND_REC *finddirs, *findfiles;
     int32_t numdirs, numfiles;
 }
 fnlist_t;
@@ -49,7 +49,6 @@ enum
 
 
 //// EXTERN DECLS
-extern struct strllist *CommandPaths, *CommandGrps;
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,9 +58,10 @@ extern const char *s_buildTimestamp;
 #ifdef __cplusplus
 }
 #endif
-extern const char *s_buildInfo;
 
 //// FUNCTIONS
+extern void PrintBuildInfo(void);
+
 extern void clearDefNamePtr(void);
 
 void G_AddGroup(const char *buffer);
@@ -88,7 +88,7 @@ static inline void realloc_copy(char **fn, const char *buf)
 
 int32_t getatoken(scriptfile *sf, const tokenlist *tl, int32_t ntokens);
 
-int32_t G_CheckCmdSwitch(int32_t argc, const char **argv, const char *str);
+int32_t G_CheckCmdSwitch(int32_t argc, char const * const * argv, const char *str);
 
 int32_t testkopen(const char *filename, char searchfirst);  // full-blown kopen4load
 int32_t check_file_exist(const char *fn);  // findfrompath with pathsearchmode=1 / search in zips
@@ -97,16 +97,19 @@ void fnlist_clearnames(fnlist_t *fnl);
 int32_t fnlist_getnames(fnlist_t *fnl, const char *dirname, const char *pattern,
                         int32_t dirflags, int32_t fileflags);
 
-char *dup_filename(const char *fn);
+
 int32_t maybe_append_ext(char *wbuf, int32_t wbufsiz, const char *fn, const char *ext);
 
 // Approximations to 2D and 3D Euclidean distances. Initial EDuke32 SVN import says
-// in jmact/mathutil.c: "Ken's reverse-engineering job".
-// Note that jmact/mathutil.c contains practically the same code, but where the
+// in mact/src/mathutil.c: "Ken's reverse-engineering job".
+// Note that mathutil.c contains practically the same code, but where the
 // individual x/y(/z) distances are passed instead.
 static inline int32_t sepldist(const int32_t dx, const int32_t dy)
 {
     vec2_t d = { klabs(dx), klabs(dy) };
+
+    if (!d.y) return d.x;
+    if (!d.x) return d.y;
 
     if (d.x < d.y)
         swaplong(&d.x, &d.y);
@@ -140,9 +143,18 @@ int32_t dist(const void *s1, const void *s2);
 void COMMON_clearbackground(int32_t numcols, int32_t numrows);
 
 // timer defs for profiling function chunks the simple way
-#define EDUKE32_TMRDEF int32_t t[20], ti=0; const char *tmrstr=__func__; fprintf(stderr,"%s\n",tmrstr); t[ti++]=getticks();
-#define EDUKE32_TMRTIC t[ti++]=getticks()
+#define EDUKE32_TMRDEF int32_t t[20], ti=0; const char *tmrstr=__func__; fprintf(stderr,"%s\n",tmrstr); t[ti++]=timerGetTicks();
+#define EDUKE32_TMRTIC t[ti++]=timerGetTicks()
 #define EDUKE32_TMRPRN do { int ii=0; fprintf(stderr,"%s: ",tmrstr); for (ii=1; ii<ti; ii++) fprintf(stderr,"%d ", t[ii]-t[ii-1]); fprintf(stderr,"\n"); } while (0)
+
+#if defined _WIN32 && !defined EDUKE32_STANDALONE
+int Paths_ReadRegistryValue(char const * const SubKey, char const * const Value, char * const Output, DWORD * OutputSize);
+#endif
+
+using PathsParseFunc = void(*)(const char *);
+void Paths_ParseSteamLibraryVDF(const char * fn, PathsParseFunc func);
+void Paths_ParseXDGDesktopFile(const char * fn, PathsParseFunc func);
+void Paths_ParseXDGDesktopFilesFromGOG(const char * homepath, const char * game, PathsParseFunc func);
 
 #ifdef __cplusplus
 }

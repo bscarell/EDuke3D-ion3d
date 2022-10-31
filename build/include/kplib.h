@@ -1,14 +1,17 @@
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 #ifndef compat_h_
 #include "compat.h"
 #endif
 
+#include "vfs.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct
 {
-    FILE *fil;    //0:no file open, !=0:open file (either stand-alone or zip)
+    buildvfs_FILE fil;    //0:no file open, !=0:open file (either stand-alone or zip)
     int32_t comptyp; //0:raw data (can be ZIP or stand-alone), 8:PKZIP LZ77 *flate
     int32_t seek0;   //0:stand-alone file, !=0: start of zip compressed stream data
     int32_t compleng;//Global variable for compression FIFO
@@ -25,8 +28,8 @@ typedef struct
 extern kzfilestate kzfs;
 
 	//High-level (easy) picture loading function:
-extern void kpzdecode (int32_t, intptr_t *, int32_t *, int32_t *, int32_t *);
-extern void kpzload (const char *, intptr_t *, int32_t *, int32_t *, int32_t *);
+extern void kpzdecode (int32_t, intptr_t *, int32_t *, int32_t *);
+extern void kpzload (const char *, intptr_t *, int32_t *, int32_t *);
 	//Low-level PNG/JPG functions:
 extern void kpgetdim (const char *, int32_t, int32_t *, int32_t *);
 extern int32_t kprender (const char *, int32_t, intptr_t, int32_t, int32_t, int32_t);

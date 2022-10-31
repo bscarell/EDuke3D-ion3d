@@ -1,18 +1,20 @@
 // "Build Engine & Tools" Copyright (c) 1993-1997 Ken Silverman
 // Ken Silverman's official web site: "http://www.advsys.net/ken"
 // See the included license file "BUILDLIC.TXT" for license info.
+//
+// This file has been modified from Ken Silverman's original release
+// by Jonathon Fowler (jf@jonof.id.au)
+// by the EDuke32 team (development@voidpoint.com)
 
 #ifndef editor_h_
 #define editor_h_
 
+#include "compat.h"
 #include "baselayer.h"
-#include <math.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define VERSION "2.0.0devel"
 
 extern const char *defaultsetupfilename;
 extern char setupfilename[BMAX_PATH];
@@ -56,19 +58,20 @@ extern int16_t searchsector, searchwall, searchstat;  //search output
 extern int16_t searchbottomwall, searchisbottom;
 extern int32_t zmode, kensplayerheight, zlock;
 
+extern int16_t newnumwalls, joinsector[2];
 extern int16_t highlightsector[MAXSECTORS], highlightsectorcnt;
 extern int16_t highlight[MAXWALLS+MAXSPRITES];
 extern int16_t asksave;
 
-extern int16_t pointhighlight, linehighlight, highlightcnt;
+extern int16_t pointhighlight, linehighlight, sectorhighlight, highlightcnt;
 
-#define DEFAULT_SPRITE_CSTAT 0
-//extern int16_t defaultspritecstat;
+extern int16_t defaultspritecstat;
 
 extern int32_t tempsectornum;
 extern int32_t temppicnum, tempcstat, templotag, temphitag, tempextra;
 extern uint32_t temppal, tempvis, tempxrepeat, tempyrepeat, tempxpanning, tempypanning;
 extern int32_t tempshade, tempxvel, tempyvel, tempzvel;
+extern int32_t tempstatnum, tempblend;
 extern char somethingintab;
 
 extern char names[MAXTILES][25];
@@ -82,7 +85,7 @@ extern int16_t startang, startsectnum;
 
 extern int32_t lastpm16time, synctics;
 extern int32_t halfxdim16, midydim16, zoom;
-extern int32_t ydim16, xdimgame, ydimgame, bppgame, xdim2d, ydim2d, forcesetup;
+extern int32_t ydim16, bppgame, forcesetup;
 extern int32_t unrealedlook, quickmapcycling;
 extern int32_t pk_turnaccel,pk_turndecel,pk_uedaccel;
 extern int32_t revertCTRL,scrollamount;
@@ -97,6 +100,11 @@ extern int32_t graphicsmode;
 extern int32_t grid, autogrid;
 extern int32_t editorgridextent;	// in engine.c
 
+static FORCE_INLINE bool editorIsInitialized(void)
+{
+    return editorgridextent != -1;
+}
+
 extern char game_executable[BMAX_PATH];
 extern const char* DefaultGameExec;
 extern const char* DefaultGameLocalExec;
@@ -110,14 +118,15 @@ extern int32_t gridlock;
 
 extern int32_t g_maxCacheSize;
 
+extern int osdvisible;
 extern int32_t g_lazy_tileselector;
-extern int32_t m32_osd_tryscript;
+extern bool m32_osd_tryscript;
 extern int32_t showheightindicators;
 extern int32_t showambiencesounds;
 
 extern int32_t numgraysects;
-extern uint8_t graysectbitmap[MAXSECTORS>>3];
-extern uint8_t graywallbitmap[MAXWALLS>>3];
+extern uint8_t graysectbitmap[(MAXSECTORS+7)>>3];
+extern uint8_t graywallbitmap[(MAXWALLS+7)>>3];
 extern int32_t autogray, showinnergray;
 
 extern void drawgradient(void);
@@ -131,6 +140,18 @@ extern void M32_DrawRoomsAndMasks(void);
 extern void yax_tweakpicnums(int32_t bunchnum, int32_t cf, int32_t restore);  // editor-only
 extern void M32_ResetFakeRORTiles(void);
 
+//// Interactive Scaling
+struct iscdata_t {
+    int8_t active, rotatep;
+    vec2_t piv;  // pivot point
+    int32_t dragx, dragy;  // dragged point
+    int32_t xsc, ysc, ang;
+};
+
+extern iscdata_t isc;
+
+#define EDITING_MAP_P() (newnumwalls>=0 || joinsector[0]>=0 || circlewall>=0 || (bstatus&1) || isc.active)
+
 // set to 1 to enable:
 #define M32_UNDO 1
 extern int32_t map_revision;
@@ -138,16 +159,24 @@ extern int32_t map_undoredo(int32_t dir);
 extern void map_undoredo_free(void);
 extern void create_map_snapshot(void);
 
+enum
+{
+    UNDO_SECTORS,
+    UNDO_WALLS,
+    UNDO_SPRITES
+};
+
 typedef struct mapundo_
 {
     int32_t revision;
     int32_t num[3];  // numsectors, numwalls, numsprites
 
-    // These exist temporarily as sector/wall/sprite data, but are compressed
-    // most of the time.  +4 bytes refcount at the beginning.
-    char *sws[3];  // sector, wall, sprite
+    // These exist temporarily as sector/wall/sprite data, but are always compressed
+    // +4 bytes refcount at the beginning.
+    char *lz4Blocks[3];  // sector, wall, sprite
+    int   lz4Size[3];
 
-    uint32_t crc[3];
+    uintptr_t crc[3];
 
     struct mapundo_ *next;  // 'redo' loads this
     struct mapundo_ *prev;  // 'undo' loads this
@@ -155,9 +184,6 @@ typedef struct mapundo_
 extern mapundo_t *mapstate;
 
 extern void FuncMenu(void);
-#ifdef LUNATIC
-extern void LuaFuncMenu(void);
-#endif
 
 // editor side view
 extern int32_t m32_sideview;
@@ -169,15 +195,15 @@ extern int32_t m32_wallscreenxy[MAXWALLS][2];
 extern int16_t m32_wallsprite[MAXWALLS+MAXSPRITES];
 extern int8_t sideview_reversehrot;
 extern int32_t scalescreeny(int32_t sy);
-extern void screencoords(int32_t *xres, int32_t *yres, int32_t x, int32_t y, int32_t zoome) ATTRIBUTE((nonnull));
+extern void editorGet2dScreenCoordinates(int32_t *xres, int32_t *yres, int32_t x, int32_t y, int32_t zoome) ATTRIBUTE((nonnull));
 //extern void invscreencoords(int32_t *dx, int32_t *dy, int32_t sx, int32_t sy, int32_t zoome);
 extern int32_t getinvdisplacement(int32_t *dx, int32_t *dy, int32_t dz) ATTRIBUTE((nonnull));
 extern int32_t getscreenvdisp(int32_t bz, int32_t zoome);
-extern void setup_sideview_sincos(void);
+extern void editorSetup2dSideView(void);
 
 extern int8_t keeptexturestretch;
+extern int16_t pointhighlightdist, linehighlightdist;
 
-extern int32_t wallength(int16_t i);
 extern void fixrepeats(int16_t i);
 extern uint32_t getlenbyrep(int32_t len, int32_t repeat);
 extern void fixxrepeat(int16_t wallnum, uint32_t lenrepquot);
@@ -190,12 +216,12 @@ extern void clearkeys(void);
 
 extern const char *ExtGetVer(void);
 extern int32_t ExtInit(void);
-extern int32_t ExtPreInit(int32_t argc,const char **argv);
+extern int32_t ExtPreInit(int32_t argc,char const * const * argv);
 extern int32_t ExtPostStartupWindow(void);
 extern void ExtPostInit(void);
 extern void ExtUnInit(void);
 extern void ExtPreCheckKeys(void);
-extern void ExtAnalyzeSprites(int32_t, int32_t, int32_t, int32_t);
+extern void ExtAnalyzeSprites(int32_t, int32_t, int32_t, int32_t, int32_t);
 extern void ExtCheckKeys(void);
 extern void ExtPreLoadMap(void);
 extern void ExtSetupMapFilename(const char *mapname);
@@ -220,6 +246,8 @@ extern const char *GetSaveBoardFilename(const char *fn);
 
 extern int32_t clockdir(int32_t wallstart);
 extern int32_t loopinside(int32_t x, int32_t y, int16_t startwall);
+
+extern void editorFlipHighlightedSectors(int about_x, int doMirror);
 
 enum {
     // NOTE: These must not be changed, see e.g. loopinside().
@@ -253,6 +281,7 @@ static inline int32_t get_nextloopstart(int32_t loopstart)
 extern int32_t corruptlevel, numcorruptthings, corruptthings[MAXCORRUPTTHINGS];
 extern int32_t autocorruptcheck;
 extern int32_t corruptcheck_noalreadyrefd, corruptcheck_heinum;
+extern int32_t corruptcheck_game_duke3d;
 extern int32_t corrupt_tryfix_alt;
 extern int32_t CheckMapCorruption(int32_t printfromlev, uint64_t tryfixing);
 
@@ -265,7 +294,6 @@ extern void showspritedata(int16_t spritenum, int16_t small);
 
 extern void drawsmallabel(const char *text, char col, char backcol, char border, int32_t dax, int32_t day, int32_t daz);
 
-extern uint8_t blackcol;
 extern int32_t circlewall;
 extern int32_t searchlock;
 
@@ -312,7 +340,7 @@ const char* getstring_simple(const char *querystr, const char *defaultstr, int32
 //int32_t snfillprintf(char *outbuf, size_t bufsiz, int32_t fill, const char *fmt, ...);
 void _printmessage16(const char *fmt, ...) ATTRIBUTE((format(printf,1,2)));
 
-#define printmessage16(fmt, ...) lastpm16time = totalclock, _printmessage16(fmt, ## __VA_ARGS__)
+#define printmessage16(fmt, ...) lastpm16time = (int32_t) totalclock, _printmessage16(fmt, ## __VA_ARGS__)
 
 extern char lastpm16buf[156];
 
@@ -351,7 +379,7 @@ void inflineintersect(int32_t x1, int32_t y1, int32_t x2, int32_t y2,
 
 void ovhscrcoords(int32_t x, int32_t y, int32_t *scrx, int32_t *scry);
 
-extern uint8_t hlsectorbitmap[MAXSECTORS>>3];
+extern uint8_t hlsectorbitmap[(MAXSECTORS+7)>>3];
 
 void test_map(int32_t mode);
 
@@ -378,27 +406,24 @@ int32_t select_sprite_tag(int32_t spritenum);
 
 extern int32_t m32_2d3dmode, m32_2d3dsize;
 extern vec2_t m32_2d3d;
+extern int32_t m32_3dundo;
 
-#define XSIZE_2D3D (xdim2d / m32_2d3dsize)
-#define YSIZE_2D3D (ydim2d / m32_2d3dsize)
+extern int g_useCwd;
 
-static inline int32_t m32_2d3d_resolutions_match()
-{
-    return (xdimgame == xdim2d && ydimgame == ydim2d);
-}
+#define XSIZE_2D3D (xdim / m32_2d3dsize)
+#define YSIZE_2D3D (ydim / m32_2d3dsize)
 
 static inline int32_t m32_is2d3dmode(void)
 {
     return !in3dmode() && m32_2d3dmode && (unsigned)cursectnum < MAXSECTORS &&
-        m32_2d3d_resolutions_match() &&
         searchx > m32_2d3d.x && searchx < (m32_2d3d.x + XSIZE_2D3D) &&
         searchy > m32_2d3d.y && searchy < (m32_2d3d.y + YSIZE_2D3D);
 }
 
-extern int32_t getspritecol(int32_t spr);
+extern int32_t editorGet2dSpriteColor(int32_t spr);
 
-#define NEXTWALL(i) (wall[wall[i].nextwall])
-#define POINT2(i) (wall[wall[i].point2])
+extern void editorMaybeLockMouse(int lock);
+
 #define SPRITESEC(j) (sector[sprite[j].sectnum])
 
 #define SCRIPTHISTSIZ 32  // should be the same as OSD_HISTORYDEPTH for maximum win, should be a power of two
@@ -450,9 +475,7 @@ enum SaveBoardFlags
 
 #define M32_MAXPALOOKUPS (MAXPALOOKUPS-RESERVEDPALS-1)
 
-FORCE_INLINE int32_t atoi_safe(const char *str) { return (int32_t)Bstrtol(str, NULL, 10); }
-
-FORCE_INLINE void inpclamp(int32_t *x, int32_t mi, int32_t ma)
+static FORCE_INLINE void inpclamp(int32_t *x, int32_t mi, int32_t ma)
 {
     if (*x > ma) *x = ma;
     if (*x < mi) *x = mi;
@@ -460,8 +483,18 @@ FORCE_INLINE void inpclamp(int32_t *x, int32_t mi, int32_t ma)
 
 #define drawtranspixel(p, col) drawpixel(p, blendtable[0][(readpixel(p) * 256) + col])
 
-#define M32_THROB klabs(sintable[((totalclock << 4) & 2047)] >> 10)
-
+// Timed offset for Mapster32 color index cycling.
+// Range: 0 .. 16
+#define M32_THROB klabs(sintable[(((int32_t) totalclock << 4) & 2047)] >> 10)
+static FORCE_INLINE int throbbinwilliams(int first, int second)
+{
+    int8_t const dif = second - first;
+    return first + ((M32_THROB >> (3 - (klabs(dif) >> 3))) ^ ksgn(dif));
+}
+static FORCE_INLINE int batmanandthrobbin(void) { return throbbinwilliams(whitecol, editorcolors[0]); }
+static FORCE_INLINE int throbandbig(void) { return throbbinwilliams(editorcolors[0], whitecol); }
+void m32_showmouse(void);
+void editorMaybeWarpMouse(int searchx, int searchy);
 #ifdef __cplusplus
 }
 #endif

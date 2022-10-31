@@ -1,12 +1,14 @@
 //
 // Microsoft C inline assembler
-// 
+//
 
 //{{{
 
 #ifdef pragmas_h_
 #ifndef pragmas_x86_h_
 #define pragmas_x86_h_
+
+#define pragmas_have_mulscale
 
 static __inline int32_t mulscale(int32_t a, int32_t d, int32_t c)
 {
@@ -21,25 +23,41 @@ static __inline int32_t mulscale(int32_t a, int32_t d, int32_t c)
 #define EDUKE32_SCALER_PRAGMA(x) \
 static __inline int32_t mulscale##x (int32_t a, int32_t d) \
 { \
-	_asm mov eax, a \
-	_asm imul d \
-	_asm shrd eax, edx, x \
+    _asm mov eax, a \
+    _asm imul d \
+    _asm shrd eax, edx, x \
 } \
 static __inline int32_t dmulscale##x (int32_t a, int32_t d, int32_t S, int32_t D) \
 { \
-	_asm mov eax, a \
-	_asm imul d \
-	_asm mov ebx, eax \
-	_asm mov eax, S \
-	_asm mov esi, edx \
-	_asm imul D \
-	_asm add eax, ebx \
-	_asm adc edx, esi \
-	_asm shrd eax, edx, x \
+    _asm mov eax, a \
+    _asm imul d \
+    _asm mov ebx, eax \
+    _asm mov eax, S \
+    _asm mov esi, edx \
+    _asm imul D \
+    _asm add eax, ebx \
+    _asm adc edx, esi \
+    _asm shrd eax, edx, x \
+} \
+static __inline int32_t tmulscale##x (int32_t a, int32_t d, int32_t b, int32_t c, int32_t S, int32_t D) \
+{ \
+    _asm mov eax, a \
+    _asm mov ebx, b \
+    _asm imul d \
+    _asm xchg eax, ebx \
+    _asm mov ecx, c \
+    _asm xchg edx, ecx \
+    _asm imul edx \
+    _asm add ebx, eax \
+    _asm adc ecx, edx \
+    _asm mov eax, S \
+    _asm imul D \
+    _asm add eax, ebx \
+    _asm adc edx, ecx \
+    _asm shrd eax, edx, x \
 } \
 
-
-EDUKE32_GENERATE_PRAGMAS 
+EDUKE32_GENERATE_PRAGMAS
 #undef EDUKE32_SCALER_PRAGMA
 
 static __inline int32_t mulscale32(int32_t a, int32_t d)
@@ -82,22 +100,27 @@ static __inline int32_t dmulscale32(int32_t a, int32_t d, int32_t S, int32_t D)
     }
 }
 
-static __inline char readpixel(void *d)
+static __inline int32_t tmulscale32(int32_t a, int32_t d, int32_t b, int32_t c, int32_t S, int32_t D)
 {
     _asm {
-        mov edx, d
-            mov al, byte ptr[edx]
+        mov eax, a
+            mov ebx, b
+            imul d
+            xchg eax, ebx
+            mov ecx, c
+            xchg edx, ecx
+            imul edx
+            add ebx, eax
+            adc ecx, edx
+            mov eax, S
+            imul D
+            add eax, ebx
+            adc edx, ecx
+            mov eax, edx
     }
 }
 
-static __inline void drawpixel(void *d, char a)
-{
-    _asm {
-        mov edx, d
-            mov al, a
-            mov byte ptr[edx], al
-    }
-}
+#define pragmas_have_clearbuf
 
 static __inline void clearbuf(void *d, int32_t c, int32_t a)
 {
@@ -108,6 +131,8 @@ static __inline void clearbuf(void *d, int32_t c, int32_t a)
             rep stosd
     }
 }
+
+#define pragmas_have_clearbufbyte
 
 static __inline void clearbufbyte(void *d, int32_t c, int32_t a)
 {
@@ -149,6 +174,8 @@ static __inline void clearbufbyte(void *d, int32_t c, int32_t a)
     }
 }
 
+#define pragmas_have_copybuf
+
 static __inline void copybuf(const void *s, void *d, int32_t c)
 {
     _asm {
@@ -158,6 +185,8 @@ static __inline void copybuf(const void *s, void *d, int32_t c)
             rep movsd
     }
 }
+
+#define pragmas_have_copybufbyte
 
 static __inline void copybufbyte(const void *s, void *d, int32_t c)
 {
@@ -199,6 +228,8 @@ static __inline void copybufbyte(const void *s, void *d, int32_t c)
     }
 }
 
+#define pragmas_have_copybufreverse
+
 static __inline void copybufreverse(const void *s, void *d, int32_t c)
 {
     _asm {
@@ -233,6 +264,8 @@ static __inline void copybufreverse(const void *s, void *d, int32_t c)
         endloop :
     }
 }
+
+#define pragmas_have_qinterpolatedown16
 
 static __inline void qinterpolatedown16(int32_t a, int32_t c, int32_t d, int32_t s)
 {
@@ -306,6 +339,8 @@ static __inline void qinterpolatedown16short(int32_t a, int32_t c, int32_t d, in
     }
 }
 
+#define pragmas_have_klabs
+
 static __inline int32_t klabs(int32_t a)
 {
     _asm {
@@ -317,7 +352,9 @@ static __inline int32_t klabs(int32_t a)
     }
 }
 
-static __inline int32_t ksgn(int32_t b)
+#define pragmas_have_ksgn
+
+static __inline int ksgn(int32_t b)
 {
     _asm {
         mov ebx, b
@@ -327,6 +364,8 @@ static __inline int32_t ksgn(int32_t b)
             adc al, 0
     }
 }
+
+#define pragmas_have_swaps
 
 static __inline void swapchar(void *a, void *b)
 {
@@ -400,6 +439,8 @@ static __inline void swap64bit(void *a, void *b)
     }
 }
 
+#define swapdouble swap64bit
+
 //swapchar2(ptr1,ptr2,xsiz); is the same as:
 //swapchar(ptr1,ptr2); swapchar(ptr1+1,ptr2+xsiz);
 static __inline void swapchar2(void *a, void *b, int32_t s)
@@ -417,6 +458,8 @@ static __inline void swapchar2(void *a, void *b, int32_t s)
             mov[eax], dx
     }
 }
+
+#define pragmas_have_krecipasm
 
 //0x007ff000 is (11<<13), 0x3f800000 is (127<<23)
 static inline int32_t krecipasm(int32_t a)

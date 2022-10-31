@@ -1,27 +1,30 @@
+// "Build Engine & Tools" Copyright (c) 1993-1997 Ken Silverman
+// Ken Silverman's official web site: "http://www.advsys.net/ken"
+// See the included license file "BUILDLIC.TXT" for license info.
+//
 // This file has been modified from Ken Silverman's original release
 // by Jonathon Fowler (jf@jonof.id.au)
-
+// by the EDuke32 team (development@voidpoint.com)
 
 #ifndef pragmas_h_
 #define pragmas_h_
+
+#include "libdivide_config.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include <limits.h>
-
-#define EDUKE32_GENERATE_PRAGMAS                                                                                       \
-    EDUKE32_SCALER_PRAGMA(1) EDUKE32_SCALER_PRAGMA(2) EDUKE32_SCALER_PRAGMA(3) EDUKE32_SCALER_PRAGMA(4)                \
-    EDUKE32_SCALER_PRAGMA(5) EDUKE32_SCALER_PRAGMA(6) EDUKE32_SCALER_PRAGMA(7) EDUKE32_SCALER_PRAGMA(8)                \
-    EDUKE32_SCALER_PRAGMA(9) EDUKE32_SCALER_PRAGMA(10) EDUKE32_SCALER_PRAGMA(11) EDUKE32_SCALER_PRAGMA(12)             \
-    EDUKE32_SCALER_PRAGMA(13) EDUKE32_SCALER_PRAGMA(14) EDUKE32_SCALER_PRAGMA(15) EDUKE32_SCALER_PRAGMA(16)            \
-    EDUKE32_SCALER_PRAGMA(17) EDUKE32_SCALER_PRAGMA(18) EDUKE32_SCALER_PRAGMA(19) EDUKE32_SCALER_PRAGMA(20)            \
-    EDUKE32_SCALER_PRAGMA(21) EDUKE32_SCALER_PRAGMA(22) EDUKE32_SCALER_PRAGMA(23) EDUKE32_SCALER_PRAGMA(24)            \
-    EDUKE32_SCALER_PRAGMA(25) EDUKE32_SCALER_PRAGMA(26) EDUKE32_SCALER_PRAGMA(27) EDUKE32_SCALER_PRAGMA(28)            \
+#define EDUKE32_GENERATE_PRAGMAS                                                                            \
+    EDUKE32_SCALER_PRAGMA(1)  EDUKE32_SCALER_PRAGMA(2)  EDUKE32_SCALER_PRAGMA(3)  EDUKE32_SCALER_PRAGMA(4)  \
+    EDUKE32_SCALER_PRAGMA(5)  EDUKE32_SCALER_PRAGMA(6)  EDUKE32_SCALER_PRAGMA(7)  EDUKE32_SCALER_PRAGMA(8)  \
+    EDUKE32_SCALER_PRAGMA(9)  EDUKE32_SCALER_PRAGMA(10) EDUKE32_SCALER_PRAGMA(11) EDUKE32_SCALER_PRAGMA(12) \
+    EDUKE32_SCALER_PRAGMA(13) EDUKE32_SCALER_PRAGMA(14) EDUKE32_SCALER_PRAGMA(15) EDUKE32_SCALER_PRAGMA(16) \
+    EDUKE32_SCALER_PRAGMA(17) EDUKE32_SCALER_PRAGMA(18) EDUKE32_SCALER_PRAGMA(19) EDUKE32_SCALER_PRAGMA(20) \
+    EDUKE32_SCALER_PRAGMA(21) EDUKE32_SCALER_PRAGMA(22) EDUKE32_SCALER_PRAGMA(23) EDUKE32_SCALER_PRAGMA(24) \
+    EDUKE32_SCALER_PRAGMA(25) EDUKE32_SCALER_PRAGMA(26) EDUKE32_SCALER_PRAGMA(27) EDUKE32_SCALER_PRAGMA(28) \
     EDUKE32_SCALER_PRAGMA(29) EDUKE32_SCALER_PRAGMA(30) EDUKE32_SCALER_PRAGMA(31)
 
-extern int32_t dmval;
 #if !defined(NOASM) && defined __cplusplus
 extern "C" {
 #endif
@@ -38,102 +41,149 @@ extern int32_t reciptable[2048], fpuasm;
 #define wo(x) ((int16_t)(x))  // word cast
 #define by(x) ((uint8_t)(x))  // byte cast
 
-#define LIBDIVIDE_ALWAYS
 #define DIVTABLESIZE 16384
-
-extern libdivide_s64pad_t divtable64[DIVTABLESIZE];
-extern libdivide_s32pad_t divtable32[DIVTABLESIZE];
 extern void initdivtables(void);
 
-#if defined(__arm__) || defined(LIBDIVIDE_ALWAYS)
-static inline uint32_t divideu32(uint32_t n, uint32_t d)
+extern libdivide::libdivide_s64_t divtable64[DIVTABLESIZE];
+extern libdivide::libdivide_s32_t divtable32[DIVTABLESIZE];
+
+extern libdivide::libdivide_s64_branchfree_t bfdivtable64[DIVTABLESIZE];
+extern libdivide::libdivide_s32_branchfree_t bfdivtable32[DIVTABLESIZE];
+
+extern int64_t lastd_s64;
+extern int64_t lastd_s64_b;
+
+extern int32_t lastd_s32;
+extern int32_t lastd_s32_b;
+
+static inline uint32_t divideu32(uint32_t const n, uint32_t const d)
 {
+    using namespace libdivide;
+
     static libdivide_u32_t udiv;
     static uint32_t lastd;
 
-    if (d == lastd)
-        goto skip;
+    if (d != lastd)
+        udiv = libdivide_u32_gen((lastd = d));
 
-    lastd = d;
-    udiv = libdivide_u32_gen(d);
-skip:
     return libdivide_u32_do(n, &udiv);
 }
 
-static inline int32_t tabledivide64(int64_t n, int32_t d)
+static inline uint64_t divideu64(uint64_t const n, uint64_t const d)
 {
-    static libdivide_s64_t sdiv;
-    static int32_t lastd;
-    libdivide_s64_t const * const dptr = ((unsigned)d < DIVTABLESIZE) ? (libdivide_s64_t *)&divtable64[d] : &sdiv;
+    using namespace libdivide;
 
-    if (d == lastd || dptr != &sdiv)
-        goto skip;
+    static libdivide_u64_t udiv;
+    static uint64_t lastd;
 
-    lastd = d;
-    sdiv = libdivide_s64_gen(d);
-skip:
-    return libdivide_s64_do(n, dptr);
+    if (d != lastd)
+        udiv = libdivide_u64_gen((lastd = d));
+
+    return libdivide_u64_do(n, &udiv);
 }
 
-static inline int32_t tabledivide32(int32_t n, int32_t d)
+static inline uint32_t divideu32_branchfree(uint32_t const n, uint32_t const d)
 {
-    static libdivide_s32_t sdiv;
-    static int32_t lastd;
-    libdivide_s32_t const * const dptr = ((unsigned)d < DIVTABLESIZE) ? (libdivide_s32_t *)&divtable32[d] : &sdiv;
+    using namespace libdivide;
 
-    if (d == lastd || dptr != &sdiv)
-        goto skip;
+    static libdivide_u32_branchfree_t udiv;
+    static uint32_t lastd;
 
-    lastd = d;
-    sdiv = libdivide_s32_gen(d);
-skip:
-    return libdivide_s32_do(n, dptr);
-}
-#else
-FORCE_INLINE uint32_t divideu32(uint32_t n, uint32_t d) { return n / d; }
+    if (d != lastd)
+        udiv = libdivide_u32_branchfree_gen((lastd = d));
 
-static inline int32_t tabledivide64(int64_t n, int32_t d)
-{
-    return ((unsigned)d < DIVTABLESIZE) ? libdivide_s64_do(n, (libdivide_s64_t *)&divtable64[d]) : n / d;
+    return libdivide_u32_branchfree_do(n, &udiv);
 }
 
-static inline int32_t tabledivide32(int32_t n, int32_t d)
+static inline uint64_t divideu64_branchfree(uint64_t const n, uint64_t const d)
 {
-    return ((unsigned)d < DIVTABLESIZE) ? libdivide_s32_do(n, (libdivide_s32_t *)&divtable32[d]) : n / d;
-}
-#endif
+    using namespace libdivide;
 
-extern uint32_t divideu32_noinline(uint32_t n, uint32_t d);
-extern int32_t tabledivide32_noinline(int32_t n, int32_t d);
-extern int32_t tabledivide64_noinline(int64_t n, int32_t d);
+    static libdivide_u64_branchfree_t udiv;
+    static uint64_t lastd;
+
+    if (d != lastd)
+        udiv = libdivide_u64_branchfree_gen((lastd = d));
+
+    return libdivide_u64_branchfree_do(n, &udiv);
+}
+
+static inline int64_t tabledivide64(int64_t const n, int64_t const d)
+{
+    using namespace libdivide;
+
+    if ((d != lastd_s64) & !((uint64_t)d < DIVTABLESIZE))
+        divtable64[0] = libdivide_s64_gen((lastd_s64 = d));
+
+    return libdivide_s64_do(n, &divtable64[((uint64_t)d < DIVTABLESIZE) * d]);
+}
+
+static inline int32_t tabledivide32(int32_t const n, int32_t const d)
+{
+    using namespace libdivide;
+    
+    if ((d != lastd_s32) & !((uint32_t)d < DIVTABLESIZE))
+        divtable32[0] = libdivide_s32_gen((lastd_s32 = d));
+
+    return libdivide_s32_do(n, &divtable32[((uint32_t)d < DIVTABLESIZE) * d]);
+}
+
+static inline int64_t tabledivide64_branchfree(int64_t const n, int64_t const d)
+{
+    using namespace libdivide;
+
+    if ((d != lastd_s64_b) & !((uint64_t)d < DIVTABLESIZE))
+        bfdivtable64[0] = libdivide_s64_branchfree_gen((lastd_s64_b = d));
+
+    return libdivide_s64_branchfree_do(n, &bfdivtable64[((uint64_t)d < DIVTABLESIZE) * d]);
+}
+
+static inline int32_t tabledivide32_branchfree(int32_t const n, int32_t const d)
+{
+    using namespace libdivide;
+
+    if ((d != lastd_s32_b) & !((uint32_t)d < DIVTABLESIZE))
+        bfdivtable32[0] = libdivide_s32_branchfree_gen((lastd_s32_b = d));
+
+    return libdivide_s32_branchfree_do(n, &bfdivtable32[((uint32_t)d < DIVTABLESIZE) * d]);
+}
+
+extern decltype(divideu32) *divideu32_noinline;
+extern decltype(divideu64) *divideu64_noinline;
+extern decltype(tabledivide32) *tabledivide32_noinline;
+extern decltype(tabledivide64)* tabledivide64_noinline;
+
+extern decltype(divideu32_branchfree)* divideu32_branchfree_noinline;
+extern decltype(divideu64_branchfree)* divideu64_branchfree_noinline;
+extern decltype(tabledivide32_branchfree) *tabledivide32_branchfree_noinline;
+extern decltype(tabledivide64_branchfree) *tabledivide64_branchfree_noinline;
 
 #ifdef GEKKO
-#include <math.h>
-static inline int32_t divscale(int32_t eax, int32_t ebx, int32_t ecx) { return tabledivide64(ldexp(eax, ecx), ebx); }
+static inline int32_t divscale(int32_t eax, int32_t ebx, int32_t ecx) { return dw(tabledivide64(ldexp(eax, ecx), ebx)); }
 #else
-static inline int32_t divscale(int32_t eax, int32_t ebx, int32_t ecx)
-{
-    const int64_t numer = qw(eax) << by(ecx);
-    return dw(tabledivide64(numer, ebx));
-}
+static inline int32_t divscale(int32_t eax, int32_t ebx, int32_t ecx) { return dw(tabledivide64(qw(eax) << by(ecx), ebx)); }
 #endif
 
-#define EDUKE32_SCALER_PRAGMA(a)                                                                                       \
-    FORCE_INLINE int32_t divscale##a(int32_t eax, int32_t ebx) { return divscale(eax, ebx, a); }
+static inline int64_t divscale64(int64_t eax, int64_t ebx, int64_t ecx) { return tabledivide64(eax << ecx, ebx); }
+
+#define EDUKE32_SCALER_PRAGMA(a) \
+    static FORCE_INLINE int32_t divscale##a(int32_t eax, int32_t ebx) { return divscale(eax, ebx, a); }
 EDUKE32_GENERATE_PRAGMAS EDUKE32_SCALER_PRAGMA(32)
 #undef EDUKE32_SCALER_PRAGMA
 
 static inline int32_t scale(int32_t eax, int32_t edx, int32_t ecx)
 {
-    const int64_t numer = qw(eax) * edx;
-    return dw(tabledivide64(numer, ecx));
+    return dw(tabledivide64(qw(eax) * edx, ecx));
 }
 
-FORCE_INLINE void swapptr(void *a, void *b)
+static FORCE_INLINE int32_t scaleadd(int32_t eax, int32_t edx, int32_t addend, int32_t ecx)
 {
-    intptr_t const t = *(intptr_t*) a;
-    *(intptr_t*) a = *(intptr_t*) b;
-    *(intptr_t*) b = t;
+    return dw(tabledivide64(qw(eax) * edx + addend, ecx));
+}
+
+static inline int32_t roundscale(int32_t eax, int32_t edx, int32_t ecx)
+{
+    return scaleadd(eax, edx, ecx / 2, ecx);
 }
 
 #if defined(__GNUC__) && defined(GEKKO)
@@ -156,96 +206,170 @@ FORCE_INLINE void swapptr(void *a, void *b)
 // GCC Inline Assembler version (ARM)
 #include "pragmas_arm.h"
 
-#else
+#endif
 
 //
 // Generic C
 //
 
-#define EDUKE32_SCALER_PRAGMA(a)                                                                                       \
-    FORCE_INLINE int32_t mulscale##a(int32_t eax, int32_t edx) { return dw((qw(eax) * qw(edx)) >> by(a)); }           \
-                                                                                                                       \
-    FORCE_INLINE int32_t dmulscale##a(int32_t eax, int32_t edx, int32_t esi, int32_t edi)                             \
-    {                                                                                                                  \
-        return dw(((qw(eax) * qw(edx)) + (qw(esi) * qw(edi))) >> by(a));                                               \
-    }
+#ifndef pragmas_have_mulscale
 
+#define EDUKE32_SCALER_PRAGMA(a)                                                                                                     \
+    static FORCE_INLINE CONSTEXPR int32_t mulscale##a(int32_t eax, int32_t edx) { return dw((qw(eax) * edx) >> by(a)); }             \
+    static FORCE_INLINE CONSTEXPR int32_t dmulscale##a(int32_t eax, int32_t edx, int32_t esi, int32_t edi)                           \
+    {                                                                                                                                \
+        return dw(((qw(eax) * edx) + (qw(esi) * edi)) >> by(a));                                                                     \
+    }                                                                                                                                \
+    static FORCE_INLINE CONSTEXPR int32_t tmulscale##a(int32_t eax, int32_t edx, int32_t ebx, int32_t ecx, int32_t esi, int32_t edi) \
+    {                                                                                                                                \
+        return dw(((qw(eax) * edx) + (qw(ebx) * ecx) + (qw(esi) * edi)) >> by(a));                                                   \
+    }
 
 EDUKE32_GENERATE_PRAGMAS EDUKE32_SCALER_PRAGMA(32)
 
 #undef EDUKE32_SCALER_PRAGMA
 
-FORCE_INLINE void swapchar(void *a, void *b)
-{
-    char const t = *((char *)b);
-    *((char *)b) = *((char *)a);
-    *((char *)a) = t;
+#endif
+
+
+#ifdef __cplusplus
 }
-FORCE_INLINE void swapchar2(void *a, void *b, int32_t s)
+template <typename T>
+static FORCE_INLINE void swap(T * const a, T * const b)
 {
-    swapchar(a, b);
+    T const t = *a;
+    *a = *b;
+    *b = t;
+}
+#define swapptr swap
+extern "C" {
+#else
+static FORCE_INLINE void swapptr(void *a, void *b)
+{
+    intptr_t const t = *(intptr_t*) a;
+    *(intptr_t*) a = *(intptr_t*) b;
+    *(intptr_t*) b = t;
+}
+#endif
+
+#ifndef pragmas_have_swaps
+#ifdef __cplusplus
+#define swapchar swap
+#define swapshort swap
+#define swaplong swap
+#define swapfloat swap
+#define swapdouble swap
+#define swap64bit swap
+#else
+static FORCE_INLINE void swapchar(void *a, void *b)
+{
+    char const t = *(char *)b;
+    *(char *)b = *(char *)a;
+    *(char *)a = t;
+}
+static FORCE_INLINE void swapshort(void *a, void *b)
+{
+    int16_t const t = *(int16_t *)b;
+    *(int16_t *)b = *(int16_t *)a;
+    *(int16_t *)a = t;
+}
+static FORCE_INLINE void swaplong(void *a, void *b)
+{
+    int32_t const t = *(int32_t *)b;
+    *(int32_t *)b = *(int32_t *)a;
+    *(int32_t *)a = t;
+}
+static FORCE_INLINE void swapfloat(void *a, void *b)
+{
+    float const t = *(float *)b;
+    *(float *)b = *(float *)a;
+    *(float *)a = t;
+}
+static FORCE_INLINE void swapdouble(void *a, void *b)
+{
+    double const t = *(double *)b;
+    *(double *)b = *(double *)a;
+    *(double *)a = t;
+}
+static FORCE_INLINE void swap64bit(void *a, void *b)
+{
+    uint64_t const t = *(uint64_t *)b;
+    *(uint64_t *)b = *(uint64_t *)a;
+    *(uint64_t *)a = t;
+}
+#endif
+static FORCE_INLINE void swapchar2(void *a, void *b, int32_t s)
+{
+    swapchar((char *)a, (char *)b);
     swapchar((char *)a + 1, (char *)b + s);
 }
-FORCE_INLINE void swapshort(void *a, void *b)
-{
-    int16_t const t = *((int16_t *)b);
-    *((int16_t *)b) = *((int16_t *)a);
-    *((int16_t *)a) = t;
-}
-FORCE_INLINE void swaplong(void *a, void *b)
-{
-    int32_t const t = *((int32_t *)b);
-    *((int32_t *)b) = *((int32_t *)a);
-    *((int32_t *)a) = t;
-}
-FORCE_INLINE void swapfloat(void *a, void *b)
-{
-    float const t = *((float *)b);
-    *((float *)b) = *((float *)a);
-    *((float *)a) = t;
-}
-FORCE_INLINE void swap64bit(void *a, void *b)
-{
-    uint64_t const t = *((uint64_t *)b);
-    *((uint64_t *)b) = *((uint64_t *)a);
-    *((uint64_t *)a) = t;
-}
+#endif
 
-FORCE_INLINE char readpixel(void *s) { return (*((char *)(s))); }
-FORCE_INLINE void drawpixel(void *s, char a) { *((char *)(s)) = a; }
+static FORCE_INLINE CONSTEXPR char readpixel(void *s) { return *(char *)s; }
+static FORCE_INLINE void drawpixel(void *s, char a) { *(char *)s = a; }
 
-FORCE_INLINE int32_t klabs(int32_t a)
+#ifndef pragmas_have_klabs
+#if 0
+static FORCE_INLINE int32_t klabs(int32_t const a)
 {
-    const uint32_t m = a >> (sizeof(int) * CHAR_BIT - 1);
+    uint32_t const m = a >> (sizeof(uint32_t) * CHAR_BIT - 1);
     return (a ^ m) - m;
 }
-FORCE_INLINE int32_t ksgn(int32_t a) { return (a > 0) - (a < 0); }
+#else
+# ifdef __cplusplus
+// some toolchains use the double version of abs for small int types, so avoid that
+static FORCE_INLINE int32_t klabs(int32_t const a) { return abs(a); }
+# else
+#  define klabs(x) abs(x)
+# endif
+#endif
+#endif
+#ifndef pragmas_have_ksgn
+static FORCE_INLINE CONSTEXPR int ksgn(int32_t a) { return (a > 0) - (a < 0); }
+#endif
 
-FORCE_INLINE int32_t mulscale(int32_t eax, int32_t edx, int32_t ecx) { return dw((qw(eax) * edx) >> by(ecx)); }
-FORCE_INLINE int32_t dmulscale(int32_t eax, int32_t edx, int32_t esi, int32_t edi, int32_t ecx)
+#ifndef pragmas_have_mulscale
+static FORCE_INLINE CONSTEXPR int32_t mulscale(int32_t eax, int32_t edx, int32_t ecx) { return dw((qw(eax) * edx) >> by(ecx)); }
+static FORCE_INLINE CONSTEXPR int32_t dmulscale(int32_t eax, int32_t edx, int32_t esi, int32_t edi, int32_t ecx)
 {
     return dw(((qw(eax) * edx) + (qw(esi) * edi)) >> by(ecx));
 }
+#endif
 
+#ifndef pragmas_have_qinterpolatedown16
 void qinterpolatedown16(intptr_t bufptr, int32_t num, int32_t val, int32_t add);
 void qinterpolatedown16short(intptr_t bufptr, int32_t num, int32_t val, int32_t add);
+#endif
 
+#ifndef pragmas_have_clearbuf
 void clearbuf(void *d, int32_t c, int32_t a);
+#endif
+#ifndef pragmas_have_copybuf
 void copybuf(const void *s, void *d, int32_t c);
+#endif
+#ifndef pragmas_have_swaps
 void swapbuf4(void *a, void *b, int32_t c);
+#endif
 
+#ifndef pragmas_have_clearbufbyte
 void clearbufbyte(void *D, int32_t c, int32_t a);
+#endif
+#ifndef pragmas_have_copybufbyte
 void copybufbyte(const void *S, void *D, int32_t c);
+#endif
+#ifndef pragmas_have_copybufreverse
 void copybufreverse(const void *S, void *D, int32_t c);
+#endif
 
+#ifndef pragmas_have_krecipasm
 static inline int32_t krecipasm(int32_t i)
 {
     // Ken did this
-    float const f = (float)i;
-    i = *(int32_t *)&f;
+    union { int32_t i; float f; } x;
+    x.f = (float)i;
+    i = x.i;
     return ((reciptable[(i >> 12) & 2047] >> (((i - 0x3f800000) >> 23) & 31)) ^ (i >> 31));
 }
-
 #endif
 
 #undef qw

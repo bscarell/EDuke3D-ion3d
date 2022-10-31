@@ -4,14 +4,31 @@
 //
 // This file has been modified from Ken Silverman's original release
 // by Jonathon Fowler (jf@jonof.id.au)
+// by the EDuke32 team (development@voidpoint.com)
 
+#pragma once
 
 #ifndef build_h_
 #define build_h_
 
+#if !defined __cplusplus || (__cplusplus < 201103L && !defined _MSC_VER)
+# error C++11 or greater is required.
+#endif
+
+#if defined _MSC_VER && _MSC_VER < 1800
+# error Visual Studio 2013 is the minimum supported version.
+#endif
+
+#include "collections.h"
 #include "compat.h"
-#include "pragmas.h"
+#include "glad/glad.h"
 #include "glbuild.h"
+#include "palette.h"
+#include "pragmas.h"
+#include "random.h"
+
+#include "vfs.h"
+#include "cache1d.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,6 +41,9 @@ enum rendmode_t {
 };
 
 #define PI 3.14159265358979323846
+#define fPI 3.14159265358979323846f
+
+#define BANG2RAD (fPI * (1.f/1024.f))
 
 #define MAXSECTORSV8 4096
 #define MAXWALLSV8 16384
@@ -33,13 +53,17 @@ enum rendmode_t {
 #define MAXWALLSV7 8192
 #define MAXSPRITESV7 4096
 
-#ifndef GEKKO
+#define MAXVOXMIPS 5
+
+#if !defined GEKKO && !defined __OPENDINGUX__
 # define MAXSECTORS MAXSECTORSV8
 # define MAXWALLS MAXWALLSV8
 # define MAXSPRITES MAXSPRITESV8
 
 # define MAXXDIM 7680
-# define MAXYDIM 3200
+# define MAXYDIM 4320
+# define MINXDIM 640
+# define MINYDIM 480
 
 // additional space beyond wall, in walltypes:
 # define M32_FIXME_WALLS 512
@@ -49,47 +73,34 @@ enum rendmode_t {
 # define MAXWALLS MAXWALLSV7
 # define MAXSPRITES MAXSPRITESV7
 
-# define MAXXDIM 860
-# define MAXYDIM 490
+#ifdef GEKKO
+#  define MAXXDIM 860
+#  define MAXYDIM 490
+# else
+#  define MAXXDIM 320
+#  define MAXYDIM 200
+# endif
 
+# define MINXDIM MAXXDIM
+# define MINYDIM MAXYDIM
 # define M32_FIXME_WALLS 0
 # define M32_FIXME_SECTORS 0
 #endif
 
-#ifdef LUNATIC
-# define NEW_MAP_FORMAT
-// A marker for LuaJIT C function callbacks, but not merely:
-# define LUNATIC_CB ATTRIBUTE((used))
-// Used for variables and functions referenced from Lua:
-# define LUNATIC_EXTERN ATTRIBUTE((used))
-#else
-# ifdef NEW_MAP_FORMAT
-#  error "New map format can only be used with Lunatic"
-# endif
-# define LUNATIC_EXTERN static
-#endif
+//define NEW_MAP_FORMAT
 
 #define MAXWALLSB ((MAXWALLS>>2)+(MAXWALLS>>3))
 
 #define MAXTILES 30720
-#define MAXUSERTILES (MAXTILES-16)  // reserve 16 tiles at the end
+#define MAXUSERTILES (MAXTILES-256)  // reserve 256 tiles at the end
 
-#define MAXVOXELS 4096
+#define MAXVOXELS 1024
 #define MAXSTATUS 1024
 #define MAXPLAYERS 16
-#define MAXBASEPALS 256
-#define MAXPALOOKUPS 256
-#define MAXBLENDTABS 256
 // Maximum number of component tiles in a multi-psky:
-#define MAXPSKYTILES 8
-#define MAXSPRITESONSCREEN 4096
+#define MAXPSKYTILES 16
+#define MAXSPRITESONSCREEN 2560
 #define MAXUNIQHUDID 256 //Extra slots so HUD models can store animation state without messing game sprites
-
-#define RESERVEDPALS 4 // don't forget to increment this when adding reserved pals
-#define DETAILPAL   (MAXPALOOKUPS - 1)
-#define GLOWPAL     (MAXPALOOKUPS - 2)
-#define SPECULARPAL (MAXPALOOKUPS - 3)
-#define NORMALPAL   (MAXPALOOKUPS - 4)
 
 #define TSPR_TEMP 99
 
@@ -99,6 +110,8 @@ enum rendmode_t {
 #define PR_LIGHT_PRIO_HIGH_GAME 3
 #define PR_LIGHT_PRIO_LOW       4
 #define PR_LIGHT_PRIO_LOW_GAME  5
+
+#define CLOCKTICKSPERSECOND 120
 
 // Convenient sprite iterators, must not be used if any sprites inside the loop
 // are potentially deleted or their sector changed...
@@ -175,7 +188,7 @@ extern int32_t r_tror_nomaskpass;
 // Moved below declarations of sector, wall, sprite.
 # else
 int16_t yax_getbunch(int16_t i, int16_t cf);
-FORCE_INLINE void yax_getbunches(int16_t i, int16_t *cb, int16_t *fb)
+static FORCE_INLINE void yax_getbunches(int16_t i, int16_t *cb, int16_t *fb)
 {
     *cb = yax_getbunch(i, YAX_CEILING);
     *fb = yax_getbunch(i, YAX_FLOOR);
@@ -190,17 +203,17 @@ int16_t yax_vnextsec(int16_t line, int16_t cf);
 void yax_update(int32_t resetstat);
 int32_t yax_getneighborsect(int32_t x, int32_t y, int32_t sectnum, int32_t cf);
 
-FORCE_INLINE int32_t yax_waltosecmask(int32_t walclipmask)
+static FORCE_INLINE CONSTEXPR int32_t yax_waltosecmask(int32_t const walclipmask)
 {
     // blocking: walstat&1 --> secstat&512
     // hitscan: walstat&64 --> secstat&2048
     return ((walclipmask&1)<<9) | ((walclipmask&64)<<5);
 }
 void yax_preparedrawrooms(void);
-void yax_drawrooms(void (*SpriteAnimFunc)(int32_t,int32_t,int32_t,int32_t),
+void yax_drawrooms(void (*SpriteAnimFunc)(int32_t,int32_t,int32_t,int32_t,int32_t),
                    int16_t sectnum, int32_t didmirror, int32_t smoothr);
-# define YAX_SKIPSECTOR(i) if (graysectbitmap[(i)>>3]&(1<<((i)&7))) continue
-# define YAX_SKIPWALL(i) if (graywallbitmap[(i)>>3]&(1<<((i)&7))) continue
+# define YAX_SKIPSECTOR(i) if (graysectbitmap[(i)>>3]&pow2char[(i)&7]) continue
+# define YAX_SKIPWALL(i) if (graywallbitmap[(i)>>3]&pow2char[(i)&7]) continue
 #else
 # define yax_preparedrawrooms()
 # define yax_drawrooms(SpriteAnimFunc, sectnum, didmirror, smoothr)
@@ -210,6 +223,9 @@ void yax_drawrooms(void (*SpriteAnimFunc)(int32_t,int32_t,int32_t,int32_t),
 
 #define CLIPMASK0 (((1L)<<16)+1L)
 #define CLIPMASK1 (((256L)<<16)+64L)
+
+#define NEXTWALL(i) (wall[wall[i].nextwall])
+#define POINT2(i) (wall[wall[i].point2])
 
 // max x/y val (= max editorgridextent in Mapster32)
 #define BXY_MAX 524288
@@ -222,59 +238,69 @@ enum {
     RS_NOCLIP = 8,
     RS_TOPLEFT = 16,
     RS_TRANS2 = 32,
+    RS_TRANS_MASK = RS_TRANS1|RS_TRANS2,
     RS_NOMASK = 64,
     RS_PERM = 128,
 
     RS_ALIGN_L = 256,
     RS_ALIGN_R = 512,
-    RS_ALIGN_MASK = 768,
+    RS_ALIGN_MASK = RS_ALIGN_L|RS_ALIGN_R,
     RS_STRETCH = 1024,
 
     ROTATESPRITE_FULL16 = 2048,
+    RS_LERP = 4096,
+    RS_FORCELERP = 8192,
+
     // ROTATESPRITE_MAX-1 is the mask of all externally available orientation bits
-    ROTATESPRITE_MAX = 4096,
+    ROTATESPRITE_MAX = 16384,
 
     RS_CENTERORIGIN = (1<<30),
 };
 
     //Make all variables in BUILD.H defined in the ENGINE,
     //and externed in GAME
-#ifdef ENGINE
+#ifdef engine_c_
 #  define EXTERN
 #else
 #  define EXTERN extern
 #endif
 
 #ifdef __cplusplus
+}
+#endif
 
-FORCE_INLINE void sector_tracker_hook(uintptr_t address);
-FORCE_INLINE void wall_tracker_hook(uintptr_t address);
-FORCE_INLINE void sprite_tracker_hook(uintptr_t address);
+#if defined __cplusplus && (defined USE_OPENGL || defined POLYMER)
+# define USE_STRUCT_TRACKERS
+#endif
 
+#ifdef USE_STRUCT_TRACKERS
+
+extern "C" {
+static FORCE_INLINE void sector_tracker_hook__(intptr_t address);
+static FORCE_INLINE void wall_tracker_hook__(intptr_t address);
+static FORCE_INLINE void sprite_tracker_hook__(intptr_t address);
 }
 
-#define TRACKER_NAME_ SectorTracker
-#define TRACKER_GLOBAL_HOOK_ sector_tracker_hook
+#define TRACKER_NAME__ SectorTracker
+#define TRACKER_HOOK_ sector_tracker_hook__
 #include "tracker.hpp"
-#undef TRACKER_NAME_
-#undef TRACKER_GLOBAL_HOOK_
+#undef TRACKER_NAME__
+#undef TRACKER_HOOK_
 
-#define TRACKER_NAME_ WallTracker
-#define TRACKER_GLOBAL_HOOK_ wall_tracker_hook
+#define TRACKER_NAME__ WallTracker
+#define TRACKER_HOOK_ wall_tracker_hook__
 #include "tracker.hpp"
-#undef TRACKER_NAME_
-#undef TRACKER_GLOBAL_HOOK_
+#undef TRACKER_NAME__
+#undef TRACKER_HOOK_
 
-#define TRACKER_NAME_ SpriteTracker
-#define TRACKER_GLOBAL_HOOK_ sprite_tracker_hook
+#define TRACKER_NAME__ SpriteTracker
+#define TRACKER_HOOK_ sprite_tracker_hook__
 #include "tracker.hpp"
-#undef TRACKER_NAME_
-#undef TRACKER_GLOBAL_HOOK_
+#undef TRACKER_NAME__
+#undef TRACKER_HOOK_
 
 #define Tracker(Container, Type) Container##Tracker<Type>
 #define TrackerCast(x) x.cast()
-
-extern "C" {
 
 #else
 
@@ -306,45 +332,45 @@ enum {
     SPR_ALIGN_MASK = 32+16,
 };
 
-#if !defined NEW_MAP_FORMAT
+#define UNTRACKED_STRUCTS__
 #include "buildtypes.h"
-#define UNTRACKED_STRUCTS
+#undef UNTRACKED_STRUCTS__
 #undef buildtypes_h__
 #include "buildtypes.h"
-#undef UNTRACKED_STRUCTS
+
+#if !defined NEW_MAP_FORMAT
+using sectortype  = sectortypev7;
+using usectortype = usectortypev7;
+
+using walltype  = walltypev7;
+using uwalltype = uwalltypev7;
+#else
+using sectortype  = sectortypevx;
+using usectortype = usectortypevx;
+
+using walltype  = walltypevx;
+using uwalltype = uwalltypevx;
 #endif
 
+using spritetype  = spritetypev7;
+using uspritetype = uspritetypev7;
+
+using uspriteptr_t = uspritetype const *;
+using uwallptr_t   = uwalltype const *;
+using usectorptr_t = usectortype const *;
+using tspriteptr_t = tspritetype *;
+
+// this is probably never going to be necessary
+EDUKE32_STATIC_ASSERT(sizeof(sectortype) == sizeof(usectortype));
+EDUKE32_STATIC_ASSERT(sizeof(walltype) == sizeof(uwalltype));
+EDUKE32_STATIC_ASSERT(sizeof(spritetype) == sizeof(uspritetype));
+
 #ifdef NEW_MAP_FORMAT
-//////////////////// Lunatic new-generation map format ////////////////////
-
-#include "buildtypes.h"
-
-// 44 bytes
-typedef struct
-{
-    Tracker(Sector, int16_t) wallptr, wallnum;
-
-    Tracker(Sector, int16_t) ceilingpicnum, ceilingheinum, ceilingbunch;
-    Tracker(Sector, uint16_t) ceilingstat;
-    Tracker(Sector, int32_t) ceilingz;
-    Tracker(Sector, int8_t) ceilingshade;
-    Tracker(Sector, uint8_t) ceilingpal, /*CM_FLOORZ:*/ ceilingxpanning, ceilingypanning;
-
-    Tracker(Sector, int16_t) floorpicnum, floorheinum, floorbunch;
-    Tracker(Sector, uint16_t) floorstat;
-    Tracker(Sector, int32_t) floorz;
-    Tracker(Sector, int8_t) floorshade;
-    Tracker(Sector, uint8_t) floorpal, floorxpanning, floorypanning;
-
-    Tracker(Sector, uint8_t) /*CM_CEILINGZ:*/ visibility, fogpal;
-    Tracker(Sector, uint16_t) lotag, hitag;
-    Tracker(Sector, int16_t) extra;
-} sectortypevx;
 
 # define SECTORVX_SZ1 offsetof(sectortypevx, ceilingpicnum)
 # define SECTORVX_SZ4 sizeof(sectortypevx)-offsetof(sectortypevx, visibility)
 
-static inline void copy_v7_from_vx_sector(sectortypev7 *v7sec, const sectortypevx *vxsec)
+static inline void copy_v7_from_vx_sector(usectortypev7 *v7sec, const sectortypevx *vxsec)
 {
     /* [wallptr..wallnum] */
     Bmemcpy(v7sec, vxsec, SECTORVX_SZ1);
@@ -381,7 +407,7 @@ static inline void copy_v7_from_vx_sector(sectortypev7 *v7sec, const sectortypev
 static inline void inplace_vx_from_v7_sector(sectortypevx *vxsec)
 {
     const sectortypev7 *v7sec = (sectortypev7 *)vxsec;
-    sectortypev7 bakv7sec;
+    usectortypev7 bakv7sec;
 
     // Can't do this in-place since the members were rearranged.
     Bmemcpy(&bakv7sec, v7sec, sizeof(sectortypev7));
@@ -440,24 +466,9 @@ static inline void inplace_vx_tweak_sector(sectortypevx *vxsec, int32_t yaxp)
 # undef SECTORVX_SZ1
 # undef SECTORVX_SZ4
 
-// 38 bytes
-typedef struct
-{
-    Tracker(Wall, int32_t) x, y;
-    Tracker(Wall, int16_t) point2, nextwall, nextsector;
-    Tracker(Wall, int16_t) upwall, dnwall;
-    Tracker(Wall, uint16_t) cstat;
-    Tracker(Wall, int16_t) picnum, overpicnum;
-    Tracker(Wall, int8_t) shade;
-    Tracker(Wall, uint8_t) pal, xrepeat, yrepeat, xpanning, ypanning;
-    Tracker(Wall, uint16_t) lotag, hitag;
-    Tracker(Wall, int16_t) extra;
-    Tracker(Wall, uint8_t) blend, filler_;
-} walltypevx;
-
 # define WALLVX_SZ2 offsetof(walltypevx, blend)-offsetof(walltypevx, cstat)
 
-static inline void copy_v7_from_vx_wall(walltypev7 *v7wal, const walltypevx *vxwal)
+static inline void copy_v7_from_vx_wall(uwalltypev7 *v7wal, const walltypevx *vxwal)
 {
     /* [x..nextsector] */
     Bmemcpy(v7wal, vxwal, offsetof(walltypevx, upwall));
@@ -503,46 +514,66 @@ static inline void inplace_vx_tweak_wall(walltypevx *vxwal, int32_t yaxp)
 
 # undef WALLVX_SZ2
 
-// NOTE: spritetype is currently the same for V7/8/9 and VX in-memory map formats.
-
-typedef sectortypevx sectortype;
-typedef walltypevx walltype;
-
-typedef sectortype tsectortype;
-typedef walltype twalltype;
-typedef spritetype tspritetype;
-//////////////////// END Lunatic new-generation map format ////////////////
-#else
-typedef sectortypev7 sectortype;
-typedef walltypev7 walltype;
 #endif
 
+#include "clip.h"
+
+int32_t getwalldist(vec2_t const in, int const wallnum);
+int32_t getwalldist(vec2_t const in, int const wallnum, vec2_t * const out);
+
+#include "screenshot.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#pragma pack(push,1)
 typedef struct {
-    uint32_t mdanimtims;
-    int16_t mdanimcur;
-    int16_t angoff, pitch, roll;
-    vec3_t offset;
-    uint8_t flags;
-    uint8_t xpanning, ypanning;
-    uint8_t filler;
-    float alpha;
-    // NOTE: keep 'tspr' on an 8-byte boundary:
-    tspritetype *tspr;
+    union
+    {
+        tspriteptr_t tspr;
 #if !defined UINTPTR_MAX
 # error Need UINTPTR_MAX define to select between 32- and 64-bit structs
 #endif
-#if UINTPTR_MAX == 0xffffffff
-    /* On a 32-bit build, pad the struct so it has the same size everywhere. */
-    intptr_t dummy_;
+#if UINTPTR_MAX != UINT64_MAX
+        /* On a 32-bit build, pad the struct so it has the same size everywhere. */
+        uint64_t ptrfill;
 #endif
+    };
+    
+    float    alpha;
+    uint16_t flags;
+
+    // this is organized so that most of the bytes that will usually be zero are adjacent
+    int16_t  mdanimcur;
+    uint32_t mdanimtims;
+    int16_t  mdangoff;
+    uint8_t  xpanning, ypanning;
+    int16_t  mdpitch, mdroll;
+    vec3_t   mdpivot_offset, mdposition_offset;
+
+    // since this goes into savegames, pad to 64 bytes for future usage
+    uint8_t  filler[12];
 } spriteext_t;
+
+EDUKE32_STATIC_ASSERT(offsetof(spriteext_t, flags) % 4 == 0);
+EDUKE32_STATIC_ASSERT(offsetof(spriteext_t, mdangoff) % 4 == 0);
+EDUKE32_STATIC_ASSERT(offsetof(spriteext_t, mdanimtims) % 4 == 0);
+EDUKE32_STATIC_ASSERT(offsetof(spriteext_t, mdposition_offset) % 4 == 0);
+EDUKE32_STATIC_ASSERT(sizeof(spriteext_t) == 64);
 
 typedef struct {
     float smoothduration;
     int16_t mdcurframe, mdoldframe;
     int16_t mdsmooth;
-    uint8_t filler[2];
 } spritesmooth_t;
+
+#ifndef NEW_MAP_FORMAT
+typedef struct {
+    uint8_t blend;
+} wallext_t;
+#endif
+#pragma pack(pop)
 
 #define SPREXT_NOTMD 1
 #define SPREXT_NOMDANIM 2
@@ -551,7 +582,19 @@ typedef struct {
 #define SPREXT_TSPRACCESS 16
 #define SPREXT_TEMPINVISIBLE 32
 
-#define TSPR_EXTRA_MDHACK 1
+#define NEG_ALPHA_TO_BLEND(alpha, blend, orientation) do { \
+    if ((alpha) < 0) { (blend) = -(alpha); (alpha) = 0; (orientation) |= RS_TRANS1; } \
+} while (0)
+
+// using the clipdist field
+enum
+{
+    TSPR_FLAGS_MDHACK = 1u<<0u,
+    TSPR_FLAGS_DRAW_LAST = 1u<<1u,
+    TSPR_FLAGS_NO_SHADOW = 1u<<2u,
+    TSPR_FLAGS_INVISIBLE_WITH_SHADOW = 1u<<3u,
+    TSPR_FLAGS_SLOPE_SPRITE = 1u<<4u,
+};
 
 EXTERN int32_t guniqhudid;
 EXTERN int32_t spritesortcnt;
@@ -560,25 +603,32 @@ extern int32_t g_loadedMapVersion;
 typedef struct {
     char *mhkfile;
     char *title;
+    char *mapart;
     uint8_t md4[16];
 } usermaphack_t;
 
 extern usermaphack_t g_loadedMapHack;
-extern int32_t compare_usermaphacks(const void *, const void *);
+extern int compare_usermaphacks(const void *, const void *);
 extern usermaphack_t *usermaphacks;
 extern int32_t num_usermaphacks;
 
 #if !defined DEBUG_MAIN_ARRAYS
 EXTERN spriteext_t *spriteext;
 EXTERN spritesmooth_t *spritesmooth;
+# ifndef NEW_MAP_FORMAT
+EXTERN wallext_t *wallext;
+# endif
 
 EXTERN sectortype *sector;
 EXTERN walltype *wall;
 EXTERN spritetype *sprite;
-EXTERN tspritetype *tsprite;
+EXTERN tspriteptr_t tsprite;
 #else
 EXTERN spriteext_t spriteext[MAXSPRITES+MAXUNIQHUDID];
 EXTERN spritesmooth_t spritesmooth[MAXSPRITES+MAXUNIQHUDID];
+# ifndef NEW_MAP_FORMAT
+EXTERN wallext_t wallext[MAXWALLS];
+# endif
 
 EXTERN sectortype sector[MAXSECTORS + M32_FIXME_SECTORS];
 EXTERN walltype wall[MAXWALLS + M32_FIXME_WALLS];
@@ -586,74 +636,145 @@ EXTERN spritetype sprite[MAXSPRITES];
 EXTERN tspritetype tsprite[MAXSPRITESONSCREEN];
 #endif
 
+#ifdef USE_STRUCT_TRACKERS
 EXTERN uint32_t sectorchanged[MAXSECTORS + M32_FIXME_SECTORS];
 EXTERN uint32_t wallchanged[MAXWALLS + M32_FIXME_WALLS];
 EXTERN uint32_t spritechanged[MAXSPRITES];
+#endif
 
 #ifdef NEW_MAP_FORMAT
-FORCE_INLINE int16_t yax_getbunch(int16_t i, int16_t cf)
+static FORCE_INLINE int16_t yax_getbunch(int16_t i, int16_t cf)
 {
     return cf ? sector[i].floorbunch : sector[i].ceilingbunch;
 }
 
-FORCE_INLINE void yax_getbunches(int16_t i, int16_t *cb, int16_t *fb)
+static FORCE_INLINE void yax_getbunches(int16_t i, int16_t *cb, int16_t *fb)
 {
     *cb = yax_getbunch(i, YAX_CEILING);
     *fb = yax_getbunch(i, YAX_FLOOR);
 }
 
-FORCE_INLINE int16_t yax_getnextwall(int16_t wal, int16_t cf)
+static FORCE_INLINE int16_t yax_getnextwall(int16_t wal, int16_t cf)
 {
     return cf ? wall[wal].dnwall : wall[wal].upwall;
 }
 
-FORCE_INLINE void yax_setnextwall(int16_t wal, int16_t cf, int16_t thenextwall)
+static FORCE_INLINE void yax_setnextwall(int16_t wal, int16_t cf, int16_t thenextwall)
 {
     YAX_NEXTWALL(wal, cf) = thenextwall;
 }
 #endif
 
-FORCE_INLINE void sector_tracker_hook(uintptr_t address)
+#ifdef USE_STRUCT_TRACKERS
+static FORCE_INLINE void sector_tracker_hook__(intptr_t const address)
 {
-    uintptr_t const usector = address - (uintptr_t)sector;
+    intptr_t const sectnum = (address - (intptr_t)sector) / sizeof(sectortype);
 
-#if DEBUGGINGAIDS
-    Bassert(usector < ((MAXSECTORS + M32_FIXME_SECTORS) * sizeof(sectortype)));
+#if DEBUGGINGAIDS>=2
+    Bassert((unsigned)sectnum < ((MAXSECTORS + M32_FIXME_SECTORS)));
 #endif
 
-    sectorchanged[usector / sizeof(sectortype)]++;
+    ++sectorchanged[sectnum];
 }
 
-FORCE_INLINE void wall_tracker_hook(uintptr_t address)
+static FORCE_INLINE void wall_tracker_hook__(intptr_t const address)
 {
-    uintptr_t const uwall = address - (uintptr_t)wall;
+    intptr_t const wallnum = (address - (intptr_t)wall) / sizeof(walltype);
 
-#if DEBUGGINGAIDS
-    Bassert(uwall < ((MAXWALLS + M32_FIXME_WALLS) * sizeof(walltype)));
+#if DEBUGGINGAIDS>=2
+    Bassert((unsigned)wallnum < ((MAXWALLS + M32_FIXME_WALLS)));
 #endif
 
-    wallchanged[uwall / sizeof(walltype)]++;
+    ++wallchanged[wallnum];
 }
 
-FORCE_INLINE void sprite_tracker_hook(uintptr_t address)
+static FORCE_INLINE void sprite_tracker_hook__(intptr_t const address)
 {
-    uintptr_t const usprite = address - (uintptr_t)sprite;
+    intptr_t const spritenum = (address - (intptr_t)sprite) / sizeof(spritetype);
 
-#if DEBUGGINGAIDS
-    Bassert(usprite < (MAXSPRITES * sizeof(spritetype)));
+#if DEBUGGINGAIDS>=2
+    Bassert((unsigned)spritenum < MAXSPRITES);
 #endif
 
-    spritechanged[usprite / sizeof(spritetype)]++;
+    ++spritechanged[spritenum];
+}
+#endif
+
+static inline tspriteptr_t renderMakeTSpriteFromSprite(tspriteptr_t const tspr, uint16_t const spritenum)
+{
+    auto const spr = (uspriteptr_t)&sprite[spritenum];
+
+    tspr->xyz = spr->xyz;
+    tspr->cstat = spr->cstat;
+    tspr->picnum = spr->picnum;
+    tspr->shade = spr->shade;
+    tspr->pal = spr->pal;
+    tspr->blend = spr->blend;
+    tspr->xrepeat = spr->xrepeat;
+    tspr->yrepeat = spr->yrepeat;
+    tspr->xoffset = spr->xoffset;
+    tspr->yoffset = spr->yoffset;
+    tspr->sectnum = spr->sectnum;
+    tspr->statnum = spr->statnum;
+    tspr->ang = spr->ang;
+    tspr->vel = spr->vel;
+    tspr->lotag = spr->lotag;
+    tspr->hitag = spr->hitag;
+    tspr->extra = spr->extra;
+
+    tspr->clipdist = 0;
+    tspr->owner = spritenum;
+
+    if ((tspr->cstat & CSTAT_SPRITE_ALIGNMENT_MASK) == CSTAT_SPRITE_ALIGNMENT_SLOPE)
+    {
+        tspr->cstat &= ~CSTAT_SPRITE_ALIGNMENT_MASK;
+        tspr->cstat |= CSTAT_SPRITE_ALIGNMENT_FLOOR;
+        tspr->clipdist |= TSPR_FLAGS_SLOPE_SPRITE;
+    }
+
+    return tspr;
+}
+
+static inline tspriteptr_t renderAddTSpriteFromSprite(uint16_t const spritenum)
+{
+    return renderMakeTSpriteFromSprite(&tsprite[spritesortcnt++], spritenum);
+}
+
+static inline void spriteSetSlope(uint16_t const spritenum, int16_t const heinum)
+{
+    auto const spr = &sprite[spritenum];
+    uint16_t const cstat = spr->cstat & CSTAT_SPRITE_ALIGNMENT_MASK;
+    if (cstat != CSTAT_SPRITE_ALIGNMENT_FLOOR && cstat != CSTAT_SPRITE_ALIGNMENT_SLOPE)
+        return;
+
+    spr->xoffset = heinum & 255;
+    spr->yoffset = (heinum >> 8) & 255;
+    spr->cstat &= ~CSTAT_SPRITE_ALIGNMENT_MASK;
+    spr->cstat |= heinum != 0 ? CSTAT_SPRITE_ALIGNMENT_SLOPE : CSTAT_SPRITE_ALIGNMENT_FLOOR;
+}
+
+static inline int16_t spriteGetSlope(uint16_t const spritenum)
+{
+    auto const spr = &sprite[spritenum];
+    uint16_t const cstat = spr->cstat & CSTAT_SPRITE_ALIGNMENT_MASK;
+    if (cstat != CSTAT_SPRITE_ALIGNMENT_SLOPE)
+        return 0;
+    return uint8_t(spr->xoffset) + (uint8_t(spr->yoffset) << 8);
 }
 
 
 EXTERN int16_t maskwall[MAXWALLSB], maskwallcnt;
 EXTERN int16_t thewall[MAXWALLSB];
-EXTERN tspritetype *tspriteptr[MAXSPRITESONSCREEN + 1];
+EXTERN tspriteptr_t tspriteptr[MAXSPRITESONSCREEN + 1];
 
-EXTERN int32_t xdim, ydim, numpages;
+EXTERN int32_t wx1, wy1, wx2, wy2;
+EXTERN int32_t xdim, ydim, numpages, upscalefactor;
 EXTERN int32_t yxaspect, viewingrange;
+extern int32_t oxyaspect;
 EXTERN intptr_t *ylookup;
+
+EXTERN int32_t rotatesprite_y_offset;
+EXTERN int32_t rotatesprite_yxaspect;
 
 #ifndef GEKKO
 #define MAXVALIDMODES 256
@@ -685,13 +806,13 @@ EXTERN int16_t headsectbunch[2][YAX_MAXBUNCHES], nextsectbunch[2][MAXSECTORS];
 
 EXTERN int32_t Numsprites;
 EXTERN int16_t numsectors, numwalls;
-EXTERN char display_mirror;
+EXTERN int32_t display_mirror;
 // totalclocklock: the totalclock value that is backed up once on each
 // drawrooms() and is used for animateoffs().
-EXTERN int32_t totalclock, totalclocklock;
-static inline int32_t BGetTime(void) { return totalclock; }
-
-EXTERN int32_t numframes, randomseed;
+EXTERN ClockTicks totalclock, totalclocklock;
+static inline int32_t BGetTime(void) { return (int32_t) totalclock; }
+EXTERN int32_t rotatespritesmoothratio;
+EXTERN int32_t numframes;
 EXTERN int16_t sintable[2048];
 
 EXTERN uint8_t palette[768];
@@ -700,7 +821,9 @@ EXTERN char *palookup[MAXPALOOKUPS];
 extern uint8_t *basepaltable[MAXBASEPALS];
 EXTERN uint8_t paletteloaded;
 EXTERN char *blendtable[MAXBLENDTABS];
-EXTERN uint8_t whitecol;
+EXTERN uint8_t whitecol, redcol, blackcol;
+
+EXTERN int32_t maxspritesonscreen;
 
 enum {
     PALETTE_MAIN = 1<<0,
@@ -716,11 +839,11 @@ EXTERN int32_t g_rotatespriteNoWidescreen;
 // alpha-blending tables:
 EXTERN uint8_t numalphatabs;
 
-EXTERN int32_t windowx1, windowy1, windowx2, windowy2;
+EXTERN vec2_t windowxy1, windowxy2;
 EXTERN int16_t *startumost, *startdmost;
 
 // The maximum tile offset ever used in any tiled parallaxed multi-sky.
-#define PSKYOFF_MAX 4
+#define PSKYOFF_MAX 16
 #define DEFAULTPSKY -1
 
 typedef struct {
@@ -735,6 +858,8 @@ typedef struct {
 
     int8_t lognumtiles;  // 1<<lognumtiles: number of tiles in multi-sky
     int8_t tileofs[MAXPSKYTILES];  // for 0 <= j < (1<<lognumtiles): tile offset relative to basetile
+
+    int32_t yscale;
 } psky_t;
 
 // Index of map-global (legacy) multi-sky:
@@ -745,7 +870,7 @@ EXTERN psky_t * multipsky;
 // Mapping of multi-sky index to base sky tile number:
 EXTERN int32_t * multipskytile;
 
-FORCE_INLINE int32_t getpskyidx(int32_t picnum)
+static FORCE_INLINE int32_t getpskyidx(int32_t picnum)
 {
     int32_t j;
 
@@ -756,7 +881,7 @@ FORCE_INLINE int32_t getpskyidx(int32_t picnum)
     return j;
 }
 
-EXTERN psky_t * E_DefinePsky(int32_t tilenum);
+EXTERN psky_t * tileSetupSky(int32_t tilenum);
 
 EXTERN char parallaxtype;
 EXTERN int32_t parallaxyoffs_override, parallaxyscale_override;
@@ -771,12 +896,55 @@ EXTERN int16_t headspritesect[MAXSECTORS+1], headspritestat[MAXSTATUS+1];
 EXTERN int16_t prevspritesect[MAXSPRITES], prevspritestat[MAXSPRITES];
 EXTERN int16_t nextspritesect[MAXSPRITES], nextspritestat[MAXSPRITES];
 
-EXTERN vec2_t tilesiz[MAXTILES];
+EXTERN vec2_16_t tilesiz[MAXTILES];
 
 EXTERN char picsiz[MAXTILES];
 EXTERN char walock[MAXTILES];
-extern const char pow2char[8];
-extern const int32_t pow2long[32];
+
+extern const char pow2char_[];
+static CONSTEXPR const int32_t pow2long[32] =
+{
+    1, 2, 4, 8,
+    16, 32, 64, 128,
+    256, 512, 1024, 2048,
+    4096, 8192, 16384, 32768,
+    65536, 131072, 262144, 524288,
+    1048576, 2097152, 4194304, 8388608,
+    16777216, 33554432, 67108864, 134217728,
+    268435456, 536870912, 1073741824, 2147483647 /* INT32_MAX */
+};
+
+static CONSTEXPR const uint32_t pow2ulong[32] =
+{
+    1, 2, 4, 8,
+    16, 32, 64, 128,
+    256, 512, 1024, 2048,
+    4096, 8192, 16384, 32768,
+    65536, 131072, 262144, 524288,
+    1048576, 2097152, 4194304, 8388608,
+    16777216, 33554432, 67108864, 134217728,
+    268435456, 536870912, 1073741824, 2147483648
+};
+
+static CONSTEXPR const int64_t pow264[64] =
+{
+    1, 2, 4, 8,
+    16, 32, 64, 128,
+    256, 512, 1024, 2048,
+    4096, 8192, 16384, 32768,
+    65536, 131072, 262144, 524288,
+    1048576, 2097152, 4194304, 8388608,
+    16777216, 33554432, 67108864, 134217728,
+    268435456, 536870912, 1073741824, 2147483648,
+    4294967296, 8589934592, 17179869184, 34359738368,
+    68719476736, 137438953472, 274877906944, 549755813888,
+    1099511627776, 2199023255552, 4398046511104, 8796093022208,
+    17592186044416, 35184372088832, 70368744177664, 140737488355328,
+    281474976710656, 562949953421312, 1125899906842624, 2251799813685248,
+    4503599627370496, 9007199254740992, 18014398509481984, 36028797018963968,
+    72057594037927936, 144115188075855872, 288230376151711744, 576460752303423488,
+    1152921504606846976, 2305843009213693952, 4611686018427387904, INT64_MAX
+};
 
 // picanm[].sf:
 // |bit(1<<7)
@@ -795,17 +963,27 @@ enum {
     PICANM_ANIMSPEED_MASK = 15,  // must be 15
 };
 
+enum {
+    TILEFLAGS_NONE = 0,
+    TILEFLAGS_TRUENPOT = (1<<1),
+};
+
 // NOTE: If the layout of this struct is changed, loadpics() must be modified
 // accordingly.
 typedef struct {
     uint8_t num;  // animate number
     int8_t xofs, yofs;
     uint8_t sf;  // anim. speed and flags
+    uint8_t tileflags; // tile-specific flags, such as true non-power-of-2 drawing.
 } picanm_t;
 EXTERN picanm_t picanm[MAXTILES];
+typedef struct { int16_t newtile; int16_t owner; } rottile_t;
+EXTERN rottile_t rottile[MAXTILES];
 EXTERN intptr_t waloff[MAXTILES];  // stores pointers to cache  -- SA
 
-EXTERN int32_t windowpos, windowx, windowy;
+EXTERN vec2_t g_windowPos;
+EXTERN bool g_windowPosValid;
+
 
     //These variables are for auto-mapping with the draw2dscreen function.
     //When you load a new board, these bits are all set to 0 - since
@@ -818,9 +996,19 @@ EXTERN int32_t windowpos, windowx, windowy;
     //   spritenum = 54;
     //   show2dsprite[spritenum>>3] &= ~(1<<(spritenum&7));
 
+EXTERN int automapping;
 EXTERN char show2dsector[(MAXSECTORS+7)>>3];
 EXTERN char show2dwall[(MAXWALLS+7)>>3];
 EXTERN char show2dsprite[(MAXSPRITES+7)>>3];
+
+struct classicht_t
+{
+    intptr_t ptr;
+    vec2_16_t upscale;
+    char lock;
+};
+
+EXTERN classicht_t classicht[MAXTILES];
 
 // In the editor, gotpic is only referenced from inline assembly;
 // the compiler needs that hint or building with LTO will discard it.
@@ -834,12 +1022,16 @@ EXTERN char GOTPIC_USED gotpic[(MAXTILES+7)>>3];
 EXTERN char gotsector[(MAXSECTORS+7)>>3];
 
 EXTERN char editorcolors[256];
+EXTERN char editorcolorsdef[256];
 
 EXTERN char faketile[(MAXTILES+7)>>3];
 EXTERN char *faketiledata[MAXTILES];
+EXTERN int faketilesize[MAXTILES];
 
 EXTERN char spritecol2d[MAXTILES][2];
 EXTERN uint8_t tilecols[MAXTILES];
+
+EXTERN char editwall[(MAXWALLS+7)>>3];
 
 extern uint8_t vgapal16[4*256];
 
@@ -848,13 +1040,6 @@ extern uint32_t drawlinepat;
 extern void faketimerhandler(void);
 
 extern char apptitle[256];
-typedef struct {
-    char r,g,b,f;
-} palette_t;
-extern palette_t curpalette[256], curpalettefaded[256], palfadergb;
-extern char palfadedelta;
-
-extern int8_t g_noFloorPal[MAXPALOOKUPS];
 
 extern int32_t novoxmips;
 
@@ -864,17 +1049,31 @@ extern float debug1, debug2;
 
 extern int16_t tiletovox[MAXTILES];
 extern int32_t usevoxels, voxscale[MAXVOXELS];
+extern uint8_t voxflags[MAXVOXELS];
+extern char g_haveVoxels;
+
+enum
+{
+    VF_NOTRANS = 1,
+};
+
+extern int32_t usehightile;
 
 #ifdef USE_OPENGL
-extern int32_t usemodels, usehightile;
+extern int32_t usemodels;
 extern int32_t rendmode;
 #endif
+extern uint8_t globalr, globalg, globalb;
 EXTERN uint16_t h_xsize[MAXTILES], h_ysize[MAXTILES];
 EXTERN int8_t h_xoffs[MAXTILES], h_yoffs[MAXTILES];
+
+EXTERN char *globalpalwritten;
+EXTERN int16_t globalpicnum;
 
 enum {
     GLOBAL_NO_GL_TILESHADES = 1<<0,
     GLOBAL_NO_GL_FULLBRIGHT = 1<<1,
+    GLOBAL_NO_GL_FOGSHADE = 1<<2,
 };
 
 extern int32_t globalflags;
@@ -883,7 +1082,7 @@ extern const char *engineerrstr;
 
 EXTERN int32_t editorzrange[2];
 
-FORCE_INLINE int32_t getrendermode(void)
+static FORCE_INLINE int32_t videoGetRenderMode(void)
 {
 #ifndef USE_OPENGL
     return REND_CLASSIC;
@@ -891,6 +1090,22 @@ FORCE_INLINE int32_t getrendermode(void)
     return rendmode;
 #endif
 }
+
+enum
+{
+    ENGINE_19950829 = 19950829,  // Powerslave/Exhumed
+    ENGINE_19960925 = 19960925,  // Blood v1.21
+    ENGINE_19961112 = 19961112,  // Duke 3D v1.5, Redneck Rampage
+    ENGINE_EDUKE32  = INT_MAX,
+};
+
+#ifndef EDUKE32_STANDALONE
+extern int32_t enginecompatibilitymode;
+#else
+static CONSTEXPR int32_t const enginecompatibilitymode = ENGINE_EDUKE32;
+#endif
+
+EXTERN int32_t crctab16[256];
 
 /*************************************************************************
 POSITION VARIABLES:
@@ -911,11 +1126,11 @@ SPRITE VARIABLES:
 
     Example: if the linked lists look like the following:
          ????????????????
-               Sector lists:               Status lists:               
+               Sector lists:               Status lists:
          ????????????????J
-           Sector0:  4, 5, 8             Status0:  2, 0, 8             
-           Sector1:  16, 2, 0, 7         Status1:  4, 5, 16, 7, 3, 9   
-           Sector2:  3, 9                                              
+           Sector0:  4, 5, 8             Status0:  2, 0, 8
+           Sector1:  16, 2, 0, 7         Status1:  4, 5, 16, 7, 3, 9
+           Sector2:  3, 9
          ????????????????
     Notice that each number listed above is shown exactly once on both the
         left and right side.  This is because any sprite that exists must
@@ -995,142 +1210,143 @@ OTHER VARIABLES:
 ***************************************************************************/
 
 typedef struct {
-    vec3_t pos;
+    union { struct { int32_t x, y, z; }; vec3_t xyz; vec2_t xy; };
     int16_t sprite, wall, sect;
 } hitdata_t;
 
 typedef struct artheader_t {
     int32_t tilestart, tileend, numtiles;
+    uint8_t* tileread;
 } artheader_t;
 #define ARTv1_UNITOFFSET ((signed)(4*sizeof(int32_t) + 2*sizeof(int16_t) + sizeof(picanm_t)))
 
-int32_t    preinitengine(void);	// a partial setup of the engine used for launch windows
-int32_t    initengine(void);
-int32_t E_PostInit(void);
-void   uninitengine(void);
+int32_t    enginePreInit(void);	// a partial setup of the engine used for launch windows
+int32_t    engineInit(void);
+int32_t enginePostInit(void);
+void   engineUnInit(void);
 void   initspritelists(void);
-int32_t loadlookups(int32_t fp);
-void generatefogpals(void);
-void fillemptylookups(void);
-void E_ReplaceTransparentColorWithBlack(void);
+int32_t engineFatalError(char const * msg);
 
-int32_t   loadboard(const char *filename, char flags, vec3_t *dapos, int16_t *daang, int16_t *dacursectnum);
-int32_t   loadmaphack(const char *filename);
-void delete_maphack_lights();
+int32_t   engineLoadBoard(const char *filename, char flags, vec3_t *dapos, int16_t *daang, int16_t *dacursectnum);
+int32_t   engineLoadMHK(const char *filename);
+void engineClearLightsFromMHK();
 #ifdef HAVE_CLIPSHAPE_FEATURE
-int32_t clipmapinfo_load(void);
+int32_t engineLoadClipMaps(void);
 #endif
 int32_t   saveboard(const char *filename, const vec3_t *dapos, int16_t daang, int16_t dacursectnum);
 
-void E_CreateDummyTile(int32_t const tile);
-void E_CreateFakeTile(int32_t const tile, int32_t tsiz, char const * const buffer);
-void E_UndefineTile(int32_t const tile);
-void set_tilesiz(int32_t picnum, int16_t dasizx, int16_t dasizy);
-int32_t tile_exists(int32_t picnum);
-int32_t E_ReadArtFileHeader(int32_t const fil, char const * const fn, artheader_t * const local);
-int32_t E_ReadArtFileHeaderFromBuffer(uint8_t const * const buf, artheader_t * const local);
-int32_t E_CheckUnitArtFileHeader(uint8_t const * const buf, int32_t length);
-void E_ConvertARTv1picanmToMemory(int32_t const picnum);
-void E_ReadArtFileTileInfo(int32_t const fil, artheader_t const * const local);
-void E_ReadArtFileIntoFakeData(int32_t const fil, artheader_t const * const local);
-int32_t   loadpics(const char *filename, int32_t askedsize);
-void E_MapArt_Clear(void);
-void E_MapArt_Setup(const char *filename);
-void   loadtile(int16_t tilenume);
-void E_LoadTileIntoBuffer(int16_t tilenume, int32_t dasiz, char *buffer);
-void E_RenderArtDataIntoBuffer(palette_t * pic, uint8_t const * buf, int32_t bufsizx, int32_t sizx, int32_t sizy);
+void    tileSetupDummy(int32_t tile);
+void    tileSetData(int32_t tile, int32_t tsiz, char const *buffer);
+void    tileDelete(int32_t tile);
+void    tileSetSize(int32_t picnum, int16_t dasizx, int16_t dasizy);
+int32_t artReadHeader(buildvfs_kfd fil, char const *fn, artheader_t *local);
+int32_t artReadHeaderFromBuffer(uint8_t const *buf, artheader_t *local);
+int32_t artCheckUnitFileHeader(uint8_t const *buf, int32_t length);
+void    tileConvertAnimFormat(int32_t picnum, uint32_t const picanmdisk);
+void    artReadManifest(buildvfs_kfd fil, artheader_t * const local);
+void    artPreloadFile(buildvfs_kfd fil, artheader_t * const local);
+int32_t artLoadFiles(const char *filename, int32_t askedsize);
+void    artClearMapArt(void);
+void    artSetupMapArt(const char *filename);
+bool    tileLoad(int16_t tilenume);
+void    tileLoadData(int16_t tilenume, int32_t dasiz, char *buffer);
+intptr_t tileLoadScaled(int const picnum, vec2_16_t* upscale = nullptr);
+int32_t tileGetCRC32(int16_t tileNum);
+vec2_16_t tileGetSize(int16_t tileNum);
+void    artConvertRGB(palette_t *pic, uint8_t const *buf, int32_t bufsizx, int32_t sizx, int32_t sizy);
+void    tileUpdatePicSiz(int32_t picnum);
 
 int32_t   qloadkvx(int32_t voxindex, const char *filename);
-intptr_t   allocatepermanenttile(int16_t tilenume, int32_t xsiz, int32_t ysiz);
-void   copytilepiece(int32_t tilenume1, int32_t sx1, int32_t sy1, int32_t xsiz, int32_t ysiz, int32_t tilenume2, int32_t sx2, int32_t sy2);
-void   makepalookup(int32_t palnum, const char *remapbuf, uint8_t r, uint8_t g, uint8_t b, char noFloorPal);
-//void   setvgapalette(void);
-void setbasepal(int32_t id, uint8_t const *table);
-void removebasepal(int32_t id);
-void setblendtab(int32_t blend, const char *tab);
-void removeblendtab(int32_t blend);
-int32_t setpalookup(int32_t palnum, const uint8_t *shtab);
-void removepalookup(int32_t palnum);
-void   setbrightness(char dabrightness, uint8_t dapalid, uint8_t flags);
-void   setpalettefade(uint8_t r, uint8_t g, uint8_t b, uint8_t offset);
+void vox_undefine(int32_t const);
+intptr_t   tileCreate(int16_t tilenume, int32_t xsiz, int32_t ysiz);
+void   tileCopySection(int32_t tilenume1, int32_t sx1, int32_t sy1, int32_t xsiz, int32_t ysiz, int32_t tilenume2, int32_t sx2, int32_t sy2);
 void   squarerotatetile(int16_t tilenume);
-void fade_screen_black(int32_t moreopaquep);
 
-int32_t   setgamemode(char davidoption, int32_t daxdim, int32_t daydim, int32_t dabpp);
-void   nextpage(void);
-void   setaspect_new();
-void   setview(int32_t x1, int32_t y1, int32_t x2, int32_t y2);
-void   setaspect(int32_t daxrange, int32_t daaspect);
-void   flushperms(void);
+int32_t   videoSetGameMode(char davidoption, int32_t daupscaledxdim, int32_t daupscaledydim, int32_t dabpp, int32_t daupscalefactor);
+void   videoNextPage(void);
+void   videoSetCorrectedAspect();
+void   videoSetViewableArea(int32_t x1, int32_t y1, int32_t x2, int32_t y2);
+void   renderSetAspect(int32_t daxrange, int32_t daaspect);
+void   renderFlushPerms(void);
 
 void plotlines2d(const int32_t *xx, const int32_t *yy, int32_t numpoints, int col) ATTRIBUTE((nonnull(1,2)));
 
 void   plotpixel(int32_t x, int32_t y, char col);
-char   getpixel(int32_t x, int32_t y);
-void   setviewtotile(int16_t tilenume, int32_t xsiz, int32_t ysiz);
-void   setviewback(void);
-void   preparemirror(int32_t dax, int32_t day, int16_t daang, int16_t dawall,
-                     int32_t *tposx, int32_t *tposy, int16_t *tang);
-void   completemirror(void);
+void   renderSetTarget(int16_t tilenume, int32_t xsiz, int32_t ysiz);
+void   renderRestoreTarget(void);
+void   renderPrepareMirror(int32_t dax, int32_t day, int32_t daz, fix16_t daang, fix16_t dahoriz, int16_t dawall,
+                           int32_t *tposx, int32_t *tposy, fix16_t *tang);
+void   renderCompleteMirror(void);
 
-int32_t   drawrooms(int32_t daposx, int32_t daposy, int32_t daposz,
-                    int16_t daang, int32_t dahoriz, int16_t dacursectnum);
-void   drawmasks(void);
-void   clearview(int32_t dacol);
-void   clearallviews(int32_t dacol);
-void   drawmapview(int32_t dax, int32_t day, int32_t zoome, int16_t ang);
+int32_t renderDrawRoomsQ16(int32_t daposx, int32_t daposy, int32_t daposz, fix16_t daang, fix16_t dahoriz, int16_t dacursectnum);
+
+static FORCE_INLINE int32_t drawrooms(int32_t daposx, int32_t daposy, int32_t daposz, int16_t daang, int16_t dahoriz, int16_t dacursectnum)
+{
+    return renderDrawRoomsQ16(daposx, daposy, daposz, fix16_from_int(daang), fix16_from_int(dahoriz), dacursectnum);
+}
+
+void   renderDrawMasks(void);
+void   videoClearViewableArea(int32_t dacol);
+void   videoClearScreen(int32_t dacol);
+void   renderDrawMapView(int32_t dax, int32_t day, int32_t zoome, int16_t ang);
 void   rotatesprite_(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
                      int8_t dashade, char dapalnum, int32_t dastat, uint8_t daalpha, uint8_t dablend,
                      int32_t cx1, int32_t cy1, int32_t cx2, int32_t cy2);
-void   drawline256(int32_t x1, int32_t y1, int32_t x2, int32_t y2, char col);
+void   renderDrawLine(int32_t x1, int32_t y1, int32_t x2, int32_t y2, char col);
+void   drawlinergb(int32_t x1, int32_t y1, int32_t x2, int32_t y2, palette_t p);
 int32_t    printext16(int32_t xpos, int32_t ypos, int16_t col, int16_t backcol,
                       const char *name, char fontsize) ATTRIBUTE((nonnull(5)));
 void   printext256(int32_t xpos, int32_t ypos, int16_t col, int16_t backcol,
                    const char *name, char fontsize) ATTRIBUTE((nonnull(5)));
+void   Buninitart(void);
+
+void   initcrc16(void);
+#define updatecrc16(crc,dat) (crc = (((crc<<8)&65535)^crctab16[((((uint16_t)crc)>>8)&65535)^(dat)]))
+static FORCE_INLINE uint16_t getcrc16(void const* buffer, int bufleng, int crc = 0)
+{
+    for (int i = 0; i < bufleng; i++) updatecrc16(crc, ((char const*)buffer)[i]);
+    return((uint16_t)(crc & 65535));
+}
+
 
 ////////// specialized rotatesprite wrappers for (very) often used cases //////////
-FORCE_INLINE void rotatesprite(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
+static FORCE_INLINE void rotatesprite(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
                                 int8_t dashade, char dapalnum, int32_t dastat,
                                 int32_t cx1, int32_t cy1, int32_t cx2, int32_t cy2)
 {
     rotatesprite_(sx, sy, z, a, picnum, dashade, dapalnum, dastat, 0, 0, cx1, cy1, cx2, cy2);
 }
 // Don't clip at all, i.e. the whole screen real estate is available:
-FORCE_INLINE void rotatesprite_fs(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
+static FORCE_INLINE void rotatesprite_fs(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
                                    int8_t dashade, char dapalnum, int32_t dastat)
 {
     rotatesprite_(sx, sy, z, a, picnum, dashade, dapalnum, dastat, 0, 0, 0,0,xdim-1,ydim-1);
 }
 
-FORCE_INLINE void rotatesprite_fs_alpha(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
+static FORCE_INLINE void rotatesprite_fs_id(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
+                                   int8_t dashade, char dapalnum, int32_t dastat, int16_t uniqid)
+{
+    int restore = guniqhudid;
+    if (uniqid) guniqhudid = uniqid;
+    rotatesprite_(sx, sy, z, a, picnum, dashade, dapalnum, dastat, 0, 0, 0,0,xdim-1,ydim-1);
+    guniqhudid = restore;
+}
+
+static FORCE_INLINE void rotatesprite_fs_alpha(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
                                   int8_t dashade, char dapalnum, int32_t dastat, uint8_t alpha)
 {
     rotatesprite_(sx, sy, z, a, picnum, dashade, dapalnum, dastat, alpha, 0, 0, 0, xdim-1, ydim-1);
 }
 
-FORCE_INLINE void rotatesprite_win(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
+static FORCE_INLINE void rotatesprite_win(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
                                     int8_t dashade, char dapalnum, int32_t dastat)
 {
-    rotatesprite_(sx, sy, z, a, picnum, dashade, dapalnum, dastat, 0, 0, windowx1,windowy1,windowx2,windowy2);
+    rotatesprite_(sx, sy, z, a, picnum, dashade, dapalnum, dastat, 0, 0, windowxy1.x,windowxy1.y,windowxy2.x,windowxy2.y);
 }
 
-void bfirst_search_init(int16_t *list, uint8_t *bitmap, int32_t *eltnumptr, int32_t maxnum, int16_t firstelt);
-void bfirst_search_try(int16_t *list, uint8_t *bitmap, int32_t *eltnumptr, int16_t elt);
-
-extern int32_t clipmoveboxtracenum;
-
-int32_t   clipmove(vec3_t *vect, int16_t *sectnum, int32_t xvect, int32_t yvect, int32_t walldist,
-                   int32_t ceildist, int32_t flordist, uint32_t cliptype) ATTRIBUTE((nonnull(1,2)));
-int32_t clipmovex(vec3_t *pos, int16_t *sectnum, int32_t xvect, int32_t yvect,
-                  int32_t walldist, int32_t ceildist, int32_t flordist, uint32_t cliptype,
-                  uint8_t noslidep) ATTRIBUTE((nonnull(1,2)));
-int32_t   clipinsidebox(int32_t x, int32_t y, int16_t wallnum, int32_t walldist);
-int32_t   clipinsideboxline(int32_t x, int32_t y, int32_t x1, int32_t y1,
-                            int32_t x2, int32_t y2, int32_t walldist);
-int32_t   pushmove(vec3_t *vect, int16_t *sectnum, int32_t walldist,
-                   int32_t ceildist, int32_t flordist, uint32_t cliptype) ATTRIBUTE((nonnull(1,2)));
-void   getzrange(const vec3_t *vect, int16_t sectnum, int32_t *ceilz, int32_t *ceilhit, int32_t *florz,
+void   getzrange(const vec3_t *pos, int16_t sectnum, int32_t *ceilz, int32_t *ceilhit, int32_t *florz,
                  int32_t *florhit, int32_t walldist, uint32_t cliptype) ATTRIBUTE((nonnull(1,3,4,5,6)));
+extern vec2_t hitscangoal;
 int32_t   hitscan(const vec3_t *sv, int16_t sectnum, int32_t vx, int32_t vy, int32_t vz,
                   hitdata_t *hitinfo, uint32_t cliptype) ATTRIBUTE((nonnull(1,6)));
 void   neartag(int32_t xs, int32_t ys, int32_t zs, int16_t sectnum, int16_t ange,
@@ -1138,98 +1354,147 @@ void   neartag(int32_t xs, int32_t ys, int32_t zs, int16_t sectnum, int16_t ange
                int32_t *neartaghitdist, int32_t neartagrange, uint8_t tagsearch,
                int32_t (*blacklist_sprite_func)(int32_t)) ATTRIBUTE((nonnull(6,7,8)));
 int32_t   cansee(int32_t x1, int32_t y1, int32_t z1, int16_t sect1,
-                 int32_t x2, int32_t y2, int32_t z2, int16_t sect2);
-void   updatesector(int32_t x, int32_t y, int16_t *sectnum) ATTRIBUTE((nonnull(3)));
-void updatesectorbreadth(int32_t x, int32_t y, int16_t *sectnum) ATTRIBUTE((nonnull(3)));
-void updatesectorexclude(int32_t x, int32_t y, int16_t *sectnum,
-                         const uint8_t *excludesectbitmap) ATTRIBUTE((nonnull(3,4)));
-void   updatesectorz(int32_t x, int32_t y, int32_t z, int16_t *sectnum) ATTRIBUTE((nonnull(4)));
+                 int32_t x2, int32_t y2, int32_t z2, int16_t sect2, int32_t wallmask = CSTAT_WALL_1WAY);
 int32_t   inside(int32_t x, int32_t y, int16_t sectnum);
+void   calc_sector_reachability(void);
+int    sectorsareconnected(int const, int const);
 void   dragpoint(int16_t pointhighlight, int32_t dax, int32_t day, uint8_t flags);
 void   setfirstwall(int16_t sectnum, int16_t newfirstwall);
+int32_t try_facespr_intersect(uspriteptr_t const spr, vec3_t const in,
+                                     int32_t vx, int32_t vy, int32_t vz,
+                                     vec3_t * const intp, int32_t strictly_smaller_than_p);
 
+#define MAXUPDATESECTORDIST 1536
+#define INITIALUPDATESECTORDIST 256
+void updatesector(int32_t const x, int32_t const y, int16_t * const sectnum) ATTRIBUTE((nonnull(3)));
+void updatesectorexclude(int32_t const x, int32_t const y, int16_t * const sectnum,
+                         const uint8_t * const excludesectbitmap) ATTRIBUTE((nonnull(3,4)));
+void updatesectorz_compat(int32_t const x, int32_t const y, int32_t const z, int16_t * const sectnum) ATTRIBUTE((nonnull(4)));
+void updatesectorz(int32_t const x, int32_t const y, int32_t const z, int16_t * const sectnum) ATTRIBUTE((nonnull(4)));
+void updatesectorneighbor(int32_t const x, int32_t const y, int16_t * const sectnum, int32_t initialMaxDistance = INITIALUPDATESECTORDIST, int32_t maxDistance = MAXUPDATESECTORDIST) ATTRIBUTE((nonnull(3)));
+void updatesectorneighborz(int32_t const x, int32_t const y, int32_t const z, int16_t * const sectnum, int32_t initialMaxDistance = INITIALUPDATESECTORDIST, int32_t maxDistance = MAXUPDATESECTORDIST) ATTRIBUTE((nonnull(4)));
+
+int findwallbetweensectors(int sect1, int sect2);
+static FORCE_INLINE int sectoradjacent(int sect1, int sect2) { return findwallbetweensectors(sect1, sect2) != -1; }
+int32_t getsectordist(vec2_t const in, int const sectnum, vec2_t * const out = nullptr);
 extern const int16_t *chsecptr_onextwall;
 int32_t checksectorpointer(int16_t i, int16_t sectnum);
 
-void   getmousevalues(int32_t *mousx, int32_t *mousy, int32_t *bstatus) ATTRIBUTE((nonnull(1,2,3)));
+void   mouseGetValues(int32_t *mousx, int32_t *mousy, int32_t *bstatus) ATTRIBUTE((nonnull(1,2,3)));
 
-#if !KRANDDEBUG && !defined LUNATIC
-FORCE_INLINE int32_t krand(void)
-{
-    randomseed = (randomseed * 1664525ul) + 221297ul;
-    return ((uint32_t) randomseed)>>16;
-}
-#else
-int32_t    krand(void);
-#endif
-
-int32_t   ksqrt(uint32_t num);
+int32_t   __fastcall ksqrtasm_old(uint32_t n);
+int32_t   __fastcall ksqrt(uint32_t num);
 int32_t   __fastcall getangle(int32_t xvect, int32_t yvect);
+fix16_t   __fastcall gethiq16angle(int32_t xvect, int32_t yvect);
+fix16_t   __fastcall getq16angledelta(fix16_t first, fix16_t second);
 
-FORCE_INLINE uint32_t uhypsq(int32_t dx, int32_t dy)
+static FORCE_INLINE fix16_t __fastcall getq16angle(int32_t xvect, int32_t yvect)
+{
+    return fix16_from_int(getangle(xvect, yvect));
+}
+
+static FORCE_INLINE CONSTEXPR uint32_t uhypsq(int32_t const dx, int32_t const dy)
 {
     return (uint32_t)dx*dx + (uint32_t)dy*dy;
 }
 
-FORCE_INLINE int32_t logapproach(int32_t val, int32_t targetval)
+static FORCE_INLINE int32_t logapproach(int32_t const val, int32_t const targetval)
 {
-    int32_t dif = targetval - val;
+    int32_t const dif = targetval - val;
     return (dif>>1) ? val + (dif>>1) : targetval;
 }
 
-void      rotatepoint(vec2_t pivot, vec2_t p, int16_t daang, vec2_t *p2) ATTRIBUTE((nonnull(4)));
+void rotatepoint(vec2_t const pivot, vec2_t p, int16_t const daang, vec2_t * const p2) ATTRIBUTE((nonnull(4)));
+
+static inline void rotatevec(vec2_t p, int16_t const daang, vec2_t * const p2)
+{
+    int const dacos = sintable[(daang+2560)&2047];
+    int const dasin = sintable[(daang+2048)&2047];
+    *p2 = { dmulscale14(p.x, dacos, -p.y, dasin), dmulscale14(p.y, dacos, p.x, dasin) };
+}
+
+
 int32_t   lastwall(int16_t point);
 int32_t   nextsectorneighborz(int16_t sectnum, int32_t refz, int16_t topbottom, int16_t direction);
 
-int32_t   getceilzofslopeptr(const sectortype *sec, int32_t dax, int32_t day) ATTRIBUTE((nonnull(1)));
-int32_t   getflorzofslopeptr(const sectortype *sec, int32_t dax, int32_t day) ATTRIBUTE((nonnull(1)));
-void   getzsofslopeptr(const sectortype *sec, int32_t dax, int32_t day,
+int32_t   getceilzofslopeptr(usectorptr_t sec, int32_t dax, int32_t day) ATTRIBUTE((nonnull(1)));
+int32_t   getflorzofslopeptr(usectorptr_t sec, int32_t dax, int32_t day) ATTRIBUTE((nonnull(1)));
+void   getzsofslopeptr(usectorptr_t sec, int32_t dax, int32_t day,
                        int32_t *ceilz, int32_t *florz) ATTRIBUTE((nonnull(1,4,5)));
+void yax_getzsofslope(int sectNum, int playerX, int playerY, int32_t* pCeilZ, int32_t* pFloorZ);
 
-FORCE_INLINE int32_t getceilzofslope(int16_t sectnum, int32_t dax, int32_t day)
+int32_t yax_getceilzofslope(int const sectnum, vec2_t const vect);
+int32_t yax_getflorzofslope(int const sectnum, vec2_t const vect);
+
+static FORCE_INLINE int32_t getceilzofslope(int16_t sectnum, int32_t dax, int32_t day)
 {
-    return getceilzofslopeptr(&sector[sectnum], dax, day);
+    return getceilzofslopeptr((usectorptr_t)&sector[sectnum], dax, day);
 }
 
-FORCE_INLINE int32_t getflorzofslope(int16_t sectnum, int32_t dax, int32_t day)
+static FORCE_INLINE int32_t getflorzofslope(int16_t sectnum, int32_t dax, int32_t day)
 {
-    return getflorzofslopeptr(&sector[sectnum], dax, day);
+    return getflorzofslopeptr((usectorptr_t)&sector[sectnum], dax, day);
 }
 
-FORCE_INLINE void getzsofslope(int16_t sectnum, int32_t dax, int32_t day, int32_t *ceilz, int32_t *florz)
+static FORCE_INLINE void getzsofslope(int16_t sectnum, int32_t dax, int32_t day, int32_t *ceilz, int32_t *florz)
 {
-    getzsofslopeptr(&sector[sectnum], dax, day, ceilz, florz);
+    getzsofslopeptr((usectorptr_t)&sector[sectnum], dax, day, ceilz, florz);
+}
+
+static FORCE_INLINE void getcorrectzsofslope(int16_t sectnum, int32_t dax, int32_t day, int32_t *ceilz, int32_t *florz)
+{
+    vec2_t closest = { dax, day };
+    getsectordist(closest, sectnum, &closest);
+    getzsofslopeptr((usectorptr_t)&sector[sectnum], closest.x, closest.y, ceilz, florz);
+}
+
+static FORCE_INLINE int32_t getcorrectceilzofslope(int16_t sectnum, int32_t dax, int32_t day)
+{
+    vec2_t closest = { dax, day };
+    getsectordist(closest, sectnum, &closest);
+    return getceilzofslopeptr((usectorptr_t)&sector[sectnum], closest.x, closest.y);
+}
+
+static FORCE_INLINE int32_t getcorrectflorzofslope(int16_t sectnum, int32_t dax, int32_t day)
+{
+    vec2_t closest = { dax, day };
+    getsectordist(closest, sectnum, &closest);
+    return getflorzofslopeptr((usectorptr_t)&sector[sectnum], closest.x, closest.y);
 }
 
 // Is <wal> a red wall in a safe fashion, i.e. only if consistency invariant
 // ".nextsector >= 0 iff .nextwall >= 0" holds.
-FORCE_INLINE int32_t redwallp(const walltype *wal)
+static FORCE_INLINE CONSTEXPR int32_t redwallp(uwallptr_t wal)
 {
     return (wal->nextwall >= 0 && wal->nextsector >= 0);
 }
 
-FORCE_INLINE int32_t E_SpriteIsValid(const int32_t i)
+static FORCE_INLINE CONSTEXPR int32_t E_SpriteIsValid(const int32_t i)
 {
     return ((unsigned)i < MAXSPRITES && sprite[i].statnum != MAXSTATUS);
 }
 
-int32_t clipshape_idx_for_sprite(spritetype *curspr, int32_t curidx);
+int clipshape_idx_for_sprite(uspriteptr_t curspr, int curidx);
 
 void   alignceilslope(int16_t dasect, int32_t x, int32_t y, int32_t z);
 void   alignflorslope(int16_t dasect, int32_t x, int32_t y, int32_t z);
-int32_t   sectorofwall(int16_t theline);
-int32_t   sectorofwall_noquick(int16_t theline);
+int32_t sectorofwall(int16_t wallNum);
+int32_t sectorofwall_noquick(int16_t wallNum);
+int32_t wallength(int16_t wallNum);
 int32_t   loopnumofsector(int16_t sectnum, int16_t wallnum);
 void setslope(int32_t sectnum, int32_t cf, int16_t slope);
 
-int32_t lintersect(int32_t x1, int32_t y1, int32_t z1, int32_t x2, int32_t y2, int32_t z2, int32_t x3,
-                      int32_t y3, int32_t x4, int32_t y4, int32_t *intx, int32_t *inty, int32_t *intz);
+int32_t lintersect(int32_t originX, int32_t originY, int32_t originZ,
+                   int32_t destX, int32_t destY, int32_t destZ,
+                   int32_t lineStartX, int32_t lineStartY, int32_t lineEndX, int32_t lineEndY,
+                   int32_t *intersectionX, int32_t *intersectionY, int32_t *intersectionZ);
 
 int32_t rayintersect(int32_t x1, int32_t y1, int32_t z1, int32_t vx, int32_t vy, int32_t vz, int32_t x3,
                      int32_t y3, int32_t x4, int32_t y4, int32_t *intx, int32_t *inty, int32_t *intz);
 #if !defined NETCODE_DISABLE
 void do_insertsprite_at_headofstat(int16_t spritenum, int16_t statnum);
 int32_t insertspritestat(int16_t statnum);
+void do_deletespritestat(int16_t deleteme);
 void do_insertsprite_at_headofsect(int16_t spritenum, int16_t sectnum);
 void do_deletespritesect(int16_t deleteme);
 #endif
@@ -1241,38 +1506,44 @@ int32_t   changespritestat(int16_t spritenum, int16_t newstatnum);
 int32_t   setsprite(int16_t spritenum, const vec3_t *) ATTRIBUTE((nonnull(2)));
 int32_t   setspritez(int16_t spritenum, const vec3_t *) ATTRIBUTE((nonnull(2)));
 
-int32_t spriteheightofsptr(const spritetype *spr, int32_t *height, int32_t alsotileyofs);
-FORCE_INLINE int32_t spriteheightofs(int16_t i, int32_t *height, int32_t alsotileyofs)
+int32_t spriteheightofsptr(uspriteptr_t spr, int32_t *height, int32_t alsotileyofs);
+static FORCE_INLINE int32_t spriteheightofs(int16_t i, int32_t *height, int32_t alsotileyofs)
 {
-    return spriteheightofsptr(&sprite[i], height, alsotileyofs);
+    return spriteheightofsptr((uspriteptr_t)&sprite[i], height, alsotileyofs);
 }
 
-int32_t   screencapture(const char *filename, char inverseit, const char *versionstr) ATTRIBUTE((nonnull(1)));
+struct OutputFileCounter {
+    uint16_t count = 0;
+    buildvfs_FILE opennextfile(char *, char *);
+    buildvfs_FILE opennextfile_withext(char *, const char *);
+};
 
 // PLAG: line utility functions
-typedef struct  s_equation {
-    float       a, b, c;
-}               _equation;
-int32_t             wallvisible(int32_t x, int32_t y, int16_t wallnum);
+typedef struct s_equation
+{
+    float a, b, c;
+} _equation;
+
+int32_t wallvisible(int32_t const x, int32_t const y, int16_t const wallnum);
 
 #define STATUS2DSIZ 144
 #define STATUS2DSIZ2 26
 
 //void   qsetmode640350(void);
 //void   qsetmode640480(void);
-void   qsetmodeany(int32_t,int32_t);
+void videoSet2dMode(char davidoption, int32_t daupscaledxdim, int32_t daupscaledydim, int32_t daupscalefactor = 1);
 void   clear2dscreen(void);
-void   draw2dgrid(int32_t posxe, int32_t posye, int32_t posze, int16_t cursectnum,
+void   editorDraw2dGrid(int32_t posxe, int32_t posye, int32_t posze, int16_t cursectnum,
                   int16_t ange, int32_t zoome, int16_t gride);
-void   draw2dscreen(const vec3_t *pos, int16_t cursectnum,
+void   editorDraw2dScreen(const vec3_t *pos, int16_t cursectnum,
                     int16_t ange, int32_t zoome, int16_t gride) ATTRIBUTE((nonnull(1)));
-int32_t   drawline16(int32_t x1, int32_t y1, int32_t x2, int32_t y2, int col);
-void   drawcircle16(int32_t x1, int32_t y1, int32_t r, int32_t eccen, char col);
+int32_t   editorDraw2dLine(int32_t x1, int32_t y1, int32_t x2, int32_t y2, int col);
+void   editorDraw2dCircle(int32_t x1, int32_t y1, int32_t r, int32_t eccen, char col);
 
-int32_t   setrendermode(int32_t renderer);
+int32_t   videoSetRenderMode(int32_t renderer);
 
 #ifdef USE_OPENGL
-void    setrollangle(int32_t rolla);
+void    renderSetRollAngle(int32_t rolla);
 #endif
 
 //  pal: pass -1 to invalidate all palettes for the tile, or >=0 for a particular palette
@@ -1286,14 +1557,23 @@ void    setrollangle(int32_t rolla);
 //         bit 6: 33% translucence, using clamping
 //         bit 7: 67% translucence, using clamping
 //       clamping is for sprites, repeating is for walls
-void invalidatetile(int16_t tilenume, int32_t pal, int32_t how);
+void tileInvalidate(int16_t tilenume, int32_t pal, int32_t how);
 
-void setpolymost2dview(void);   // sets up GL for 2D drawing
+void polymostSet2dView(void);   // sets up GL for 2D drawing
 
 int32_t polymost_drawtilescreen(int32_t tilex, int32_t tiley, int32_t wallnum, int32_t dimen, int32_t tilezoom,
                                 int32_t usehitile, uint8_t *loadedhitile);
 void polymost_glreset(void);
 void polymost_precache(int32_t dapicnum, int32_t dapalnum, int32_t datype);
+
+enum cutsceneflags {
+    CUTSCENE_FORCEFILTER = 1,
+    CUTSCENE_FORCENOFILTER = 2,
+    CUTSCENE_TEXTUREFILTER = 4,
+    CUTSCENE_FILTERMASK = CUTSCENE_FORCEFILTER | CUTSCENE_FORCENOFILTER | CUTSCENE_TEXTUREFILTER,
+};
+
+extern int32_t benchmarkScreenshot;
 
 #ifdef USE_OPENGL
 extern int32_t glanisotropy;
@@ -1301,46 +1581,21 @@ extern int32_t glusetexcompr;
 extern int32_t gltexfiltermode;
 
 enum {
-    TEXFILTER_OFF = 2, // GL_NEAREST_MIPMAP_NEAREST
+    TEXFILTER_OFF = 0, // GL_NEAREST
     TEXFILTER_ON = 5, // GL_LINEAR_MIPMAP_LINEAR
 };
 
-extern int32_t glredbluemode;
 extern int32_t glusetexcache, glusememcache;
-extern int32_t glmultisample, glnvmultisamplehint;
 extern int32_t glprojectionhacks;
 extern int32_t gltexmaxsize;
 void gltexapplyprops (void);
 void texcache_invalidate(void);
 
-#ifndef EDUKE32_GLES
-extern int32_t r_detailmapping;
-extern int32_t r_glowmapping;
-#endif
-
-extern int32_t r_vertexarrays;
-extern int32_t r_vbos;
-extern int32_t r_vbocount;
-extern int32_t r_animsmoothing;
-extern int32_t r_parallaxskyclamping;
-extern int32_t r_parallaxskypanning;
-extern int32_t r_fullbrights;
-extern int32_t r_downsize;
-extern int32_t r_downsizevar;
 extern int32_t mdtims, omdtims;
 extern int32_t glrendmode;
 #endif
 
-void hicinit(void);
-// effect bitset: 1 = greyscale, 2 = invert
-void hicsetpalettetint(int32_t palnum, char r, char g, char b, char effect);
-// flags bitset: 1 = don't compress
-int32_t hicsetsubsttex(int32_t picnum, int32_t palnum, const char *filen, float alphacut,
-                       float xscale, float yscale, float specpower, float specfactor, char flags);
-int32_t hicsetskybox(int32_t picnum, int32_t palnum, char *faces[6], int32_t flags);
-int32_t hicclearsubst(int32_t picnum, int32_t palnum);
-
-int32_t Ptile2tile(int32_t tile, int32_t pallet) ATTRIBUTE((pure));
+int32_t Ptile2tile(int32_t tile, int32_t palette) ATTRIBUTE((pure));
 int32_t md_loadmodel(const char *fn);
 int32_t md_setmisc(int32_t modelid, float scale, int32_t shadeoff, float zadd, float yoffset, int32_t flags);
 // int32_t md_tilehasmodel(int32_t tilenume, int32_t pal);
@@ -1349,13 +1604,14 @@ extern const char *G_DefaultDefFile(void);
 extern const char *G_DefFile(void);
 extern char *g_defNamePtr;
 
-extern char **g_defModules;
-extern int32_t g_defModulesNum;
+extern GrowArray<char *> g_defModules;
 
 #ifdef HAVE_CLIPSHAPE_FEATURE
-extern char **g_clipMapFiles;
-extern int32_t g_clipMapFilesNum;
+extern GrowArray<char *> g_clipMapFiles;
 #endif
+
+EXTERN int32_t nextvoxid;
+EXTERN intptr_t voxoff[MAXVOXELS][MAXVOXMIPS]; // used in KenBuild
 
 #ifdef USE_OPENGL
 // TODO: dynamically allocate this
@@ -1379,11 +1635,21 @@ typedef struct
 EXTERN int32_t mdinited;
 EXTERN tile2model_t tile2model[MAXTILES+EXTRATILES];
 
-FORCE_INLINE int32_t md_tilehasmodel(int32_t tilenume,int32_t pal)
+static FORCE_INLINE int32_t md_tilehasmodel(int32_t const tilenume, int32_t const pal)
 {
     return mdinited ? tile2model[Ptile2tile(tilenume,pal)].modelid : -1;
 }
 #endif  // defined USE_OPENGL
+
+static FORCE_INLINE int tilehasmodelorvoxel(int const tilenume, int pal)
+{
+    UNREFERENCED_PARAMETER(pal);
+    return
+#ifdef USE_OPENGL
+    (videoGetRenderMode() >= REND_POLYMOST && mdinited && usemodels && tile2model[Ptile2tile(tilenume, pal)].modelid != -1) ||
+#endif
+    (videoGetRenderMode() <= REND_POLYMOST && usevoxels && tiletovox[tilenume] != -1);
+}
 
 int32_t md_defineframe(int32_t modelid, const char *framename, int32_t tilenume,
                        int32_t skinnum, float smoothduration, int32_t pal);
@@ -1400,65 +1666,83 @@ int32_t loaddefinitionsfile(const char *fn);
 
 // if loadboard() fails with -2 return, try loadoldboard(). if it fails with
 // -2, board is dodgy
-int32_t loadoldboard(const char *filename, char fromwhere, vec3_t *dapos, int16_t *daang, int16_t *dacursectnum);
+int32_t engineLoadBoardV5V6(const char *filename, char fromwhere, vec3_t *dapos, int16_t *daang, int16_t *dacursectnum);
 
+#ifdef __cplusplus
+}
+#endif
 
-// Hash functions
-
-typedef struct _hashitem // size is 12/24 bytes.
-{
-    char *string;
-    intptr_t key;
-    struct _hashitem *next;
-} hashitem_t;
-
-typedef struct
-{
-    int32_t size;
-    hashitem_t **items;
-} hashtable_t;
-
-void hash_init(hashtable_t *t);
-void hash_loop(hashtable_t *t, void (*func)(const char *, intptr_t));
-void hash_free(hashtable_t *t);
-intptr_t  hash_findcase(const hashtable_t *t, const char *s);
-intptr_t  hash_find(const hashtable_t *t, const char *s);
-void hash_add(hashtable_t *t, const char *s, intptr_t key, int32_t replace);
-void hash_delete(hashtable_t *t, const char *s);
+#include "hash.h"
 
 #ifdef POLYMER
 # include "polymer.h"
-#else
-# ifdef USE_OPENGL
-#  include "polymost.h"
-# endif
+#endif
+#ifdef USE_OPENGL
+# include "polymost.h"
 #endif
 
-FORCE_INLINE void push_nofog(void)
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+static FORCE_INLINE void renderDisableFog(void)
 {
 #ifdef USE_OPENGL
-    if (getrendermode() >= REND_POLYMOST)
+    if (videoGetRenderMode() >= REND_POLYMOST)
     {
-        bglDisable(GL_FOG);
+        polymost_setFogEnabled(false);
     }
 #endif
 }
 
-FORCE_INLINE void pop_nofog(void)
+static FORCE_INLINE void renderEnableFog(void)
 {
 #ifdef USE_OPENGL
-    if (getrendermode() >= REND_POLYMOST && !nofog)
-        bglEnable(GL_FOG);
+    if (videoGetRenderMode() >= REND_POLYMOST && !nofog)
+        polymost_setFogEnabled(true);
 #endif
 }
 
-static vec2_t const zerovec = { 0, 0 };
+/* Different "is inside" predicates.
+ * NOTE: The redundant bound checks are expected to be optimized away in the
+ * inlined code. */
 
-#ifdef LUNATIC
-extern const int32_t engine_main_arrays_are_static;
-extern const int32_t engine_v8;
-int32_t Mulscale(int32_t a, int32_t b, int32_t sh);
-#endif
+static FORCE_INLINE CONSTEXPR int inside_p(int32_t const x, int32_t const y, int const sectnum)
+{
+    return ((unsigned)sectnum < MAXSECTORS && inside(x, y, sectnum) == 1);
+}
+
+static FORCE_INLINE CONSTEXPR int inside_exclude_p(int32_t const x, int32_t const y, int const sectnum, const uint8_t *excludesectbitmap)
+{
+    return ((unsigned)sectnum < MAXSECTORS && !bitmap_test(excludesectbitmap, sectnum) && inside_p(x, y, sectnum));
+}
+
+/* NOTE: no bound check for inside_z_p */
+static FORCE_INLINE int inside_z_p(int32_t const x, int32_t const y, int32_t const z, int const sectnum)
+{
+    int32_t cz, fz;
+    getzsofslope(sectnum, x, y, &cz, &fz);
+    return (z >= cz && z <= fz && inside_p(x, y, sectnum));
+}
+
+static FORCE_INLINE int inside_exclude_z_p(int32_t const x, int32_t const y, int32_t const z, int const sectnum, const uint8_t *excludesectbitmap)
+{
+    int32_t cz, fz;
+    getzsofslope(sectnum, x, y, &cz, &fz);
+    return (z >= cz && z <= fz && inside_exclude_p(x, y, sectnum, excludesectbitmap));
+}
+
+#define SET_AND_RETURN(Lval, Rval) \
+    do                             \
+    {                              \
+        (Lval) = (Rval);           \
+        return;                    \
+    } while (0)
+
+static FORCE_INLINE int64_t compat_maybe_truncate_to_int32(int64_t val)
+{
+    return enginecompatibilitymode != ENGINE_EDUKE32 ? (int32_t)val : val;
+}
 
 static inline int32_t clipmove_old(int32_t *x, int32_t *y, int32_t *z, int16_t *sectnum, int32_t xvect, int32_t yvect, int32_t walldist,
                    int32_t ceildist, int32_t flordist, uint32_t cliptype) ATTRIBUTE((nonnull(1,2,3,4)));
@@ -1508,6 +1792,51 @@ static inline int32_t setspritez_old(int16_t spritenum, int32_t x, int32_t y, in
 {
     const vec3_t vector = { x, y, z };
     return setspritez(spritenum, &vector);
+}
+
+extern int32_t rintersect(int32_t x1, int32_t y1, int32_t z1,
+    int32_t vx_, int32_t vy_, int32_t vz,
+    int32_t x3, int32_t y3, int32_t x4, int32_t y4,
+    int32_t *intx, int32_t *inty, int32_t *intz);
+
+static inline int16_t tspriteGetSlope(tspriteptr_t const tspr)
+{
+    if (!(tspr->clipdist & TSPR_FLAGS_SLOPE_SPRITE))
+        return 0;
+    return uint8_t(tspr->xoffset) + (uint8_t(tspr->yoffset) << 8);
+}
+
+static inline int32_t spriteGetZOfSlope(uint16_t const spritenum, vec2_t pos)
+{
+    auto const spr = &sprite[spritenum];
+    int16_t const heinum = spriteGetSlope(spritenum);
+    if (heinum == 0)
+        return spr->z;
+
+    int const j = dmulscale4(sintable[(spr->ang+1024)&2047], pos.y-spr->y,
+                            -sintable[(spr->ang+512)&2047], pos.x-spr->x);
+    return spr->z + mulscale18(heinum,j);
+}
+
+static inline int32_t tspriteGetZOfSlope(tspriteptr_t const tspr, int32_t dax, int32_t day)
+{
+    int16_t const heinum = tspriteGetSlope(tspr);
+    if (heinum == 0)
+        return tspr->z;
+
+    int const j = dmulscale4(sintable[(tspr->ang+1024)&2047], day-tspr->y,
+                            -sintable[(tspr->ang+512)&2047], dax-tspr->x);
+    return tspr->z + mulscale18(heinum,j);
+}
+
+static inline float tspriteGetZOfSlopeFloat(tspriteptr_t const tspr, float dax, float day)
+{
+    int16_t const heinum = tspriteGetSlope(tspr);
+    if (heinum == 0)
+        return float(tspr->z);
+
+    float const f = sintable[(tspr->ang+1024)&2047] * (day-tspr->y) - sintable[(tspr->ang+512)&2047] * (dax-tspr->x);
+    return float(tspr->z) + heinum * f * (1.f/4194304.f);
 }
 
 #ifdef __cplusplus
