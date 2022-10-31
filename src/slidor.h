@@ -24,24 +24,17 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
 
-#define TEXT_INFO_TIME (3)
-#define TEXT_INFO_X (16)
-//#define TEXT_INFO_Y (20)
-#define TEXT_INFO_Y (40)
-#define TEXT_INFO_YOFF (10)
-#define TEXT_INFO_LINE(line) (TEXT_INFO_Y + ((line) * TEXT_INFO_YOFF))
-//#define TEXT_INFO_LINE(line) (TEXT_INFO_Y + ((line) * TEXT_INFO_YOFF) + GlobalInfoLineOffset)
+#ifndef SLIDOR_PUBLIC_
+#define SLIDOR_PUBLIC_
 
-void DisplayFragNames(PLAYERp pp);
-void DisplayMiniBarSmString(PLAYERp pp,short xs,short ys, short pal, const char *buffer);
-void DisplaySmString(PLAYERp pp, short xs, short ys, short pal, const char *buffer);
-void DisplayMiniBarNumber(short xs,short ys,int number);
-void DisplaySummaryString(PLAYERp pp,short xs,short ys,short color,short shade,const char *buffer);
-void DisplayPanelNumber(PLAYERp pp,short xs,short ys,int number);
-void PutStringInfo(PLAYERp pp, const char *string);
-void PutStringInfoLine(PLAYERp pp, const char *string);
-void PutStringInfoLine2(PLAYERp pp, const char *string);
-void pClearTextLine(PLAYERp pp,long y);
-void pMenuClearTextLine(PLAYERp pp);
+short DoSlidorMatch(PLAYERp pp, short match, SWBOOL);
+SWBOOL TestSlidorMatchActive(short match);
+void InterpSectorSprites(short sectnum, SWBOOL state);
 
-void StringTimer(PANEL_SPRITEp psp);
+typedef void INTERP_FUNC (int *);
+typedef INTERP_FUNC *INTERP_FUNCp;
+
+void SetSlidorActive(short SpriteNum);
+void DoSlidorInterp(short, INTERP_FUNCp);
+
+#endif

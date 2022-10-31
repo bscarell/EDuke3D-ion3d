@@ -24,24 +24,22 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
 
-#define TEXT_INFO_TIME (3)
-#define TEXT_INFO_X (16)
-//#define TEXT_INFO_Y (20)
-#define TEXT_INFO_Y (40)
-#define TEXT_INFO_YOFF (10)
-#define TEXT_INFO_LINE(line) (TEXT_INFO_Y + ((line) * TEXT_INFO_YOFF))
-//#define TEXT_INFO_LINE(line) (TEXT_INFO_Y + ((line) * TEXT_INFO_YOFF) + GlobalInfoLineOffset)
+#ifndef RESERVE_H
+#define RESERVE_H
 
-void DisplayFragNames(PLAYERp pp);
-void DisplayMiniBarSmString(PLAYERp pp,short xs,short ys, short pal, const char *buffer);
-void DisplaySmString(PLAYERp pp, short xs, short ys, short pal, const char *buffer);
-void DisplayMiniBarNumber(short xs,short ys,int number);
-void DisplaySummaryString(PLAYERp pp,short xs,short ys,short color,short shade,const char *buffer);
-void DisplayPanelNumber(PLAYERp pp,short xs,short ys,int number);
-void PutStringInfo(PLAYERp pp, const char *string);
-void PutStringInfoLine(PLAYERp pp, const char *string);
-void PutStringInfoLine2(PLAYERp pp, const char *string);
-void pClearTextLine(PLAYERp pp,long y);
-void pMenuClearTextLine(PLAYERp pp);
+// This header is used for reserving tile space for programatic purposes
+// MAXTILES is currently at 6144 in size - anything under this is ok
 
-void StringTimer(PANEL_SPRITEp psp);
+#define MAXMIRRORS          8
+// This is just some, high, blank tile number not used
+// by real graphics to put the MAXMIRRORS mirrors in
+#define MIRRORLABEL         6000
+
+#define TILT_TILE           6016
+
+// save screen and tilt tile stuff
+#define SAVE_SCREEN_TILE    6017
+#define SAVE_SCREEN_XSIZE 160L
+#define SAVE_SCREEN_YSIZE 100L
+#endif
+

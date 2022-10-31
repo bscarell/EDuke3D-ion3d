@@ -1,12 +1,13 @@
 //-------------------------------------------------------------------------
 /*
-Copyright (C) 2010 EDuke32 developers and contributors
+Copyright (C) 1997, 2005 - 3D Realms Entertainment
 
-This file is part of EDuke32.
+This file is part of Shadow Warrior version 1.2
 
-EDuke32 is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License version 2
-as published by the Free Software Foundation.
+Shadow Warrior is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,83 +18,119 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+Original Source: 1997 - Frank Maddin and Jim Norwood
+Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
 
-#include "duke3d.h"
+// rts.c
 
-#include "vfs.h"
+#include "build.h"
+#include "cache1d.h"
+#include "baselayer.h"
 
+#include "mytypes.h"
+#include "_rts.h"
+#include "rts.h"
+#include "cache.h"
 
-static int32_t rts_numlumps;
-static void  **rts_lumpcache;
-static lumpinfo_t *rts_lumpinfo;
-static int32_t RTS_Started = FALSE;
+extern char ds[];
+char lumplockbyte[11];
 
-char rts_lumplockbyte[11];
+//=============
+// STATICS
+//=============
 
+static int32_t numlumps = 0;
+static intptr_t *lumpcache = NULL;
+static lumpinfo_t *lumpinfo = NULL;              // location of each lump on disk
 
 /*
+============================================================================
+
+                                                LUMP BASED ROUTINES
+
+============================================================================
+*/
+
+/*
+====================
+=
 = RTS_AddFile
 =
 = All files are optional, but at least one file must be found
 = Files with a .rts extension are wadlink files with multiple lumps
 = Other files are single lumps with the base filename for the lump name
+=
+====================
 */
-static int32_t RTS_AddFile(const char *filename)
+
+int32_t RTS_AddFile(char *filename)
 {
     wadinfo_t  header;
-    int32_t i, length, startlump;
+    lumpinfo_t *lump_p;
+    int32_t     i;
+    int32_t      handle, length;
+    int32_t      startlump;
     filelump_t *fileinfo, *fileinfoo;
 
-    // read the entire file in
-    //      FIXME: shared opens
+//
+// read the entire file in
+//      FIXME: shared opens
 
-    buildvfs_kfd handle = kopen4loadfrommod(filename, 0);
-
-    if (handle == buildvfs_kfd_invalid)
+    handle = kopen4load(filename, 0);
+    if (handle < 0)
+    {
+        buildprintf("RTS file %s was not found\n",filename);
         return -1;
-    else
-        LOG_F(INFO, "Loaded %s", filename);
+    }
 
-    startlump = rts_numlumps;
+    startlump = numlumps;
 
     // WAD file
-    i = kread(handle, &header, sizeof(header));
-    if (i != sizeof(header) || Bmemcmp(header.identification, "IWAD", 4))
+//   printf("    Adding %s.\n",filename);
+    kread(handle, &header, sizeof(header));
+    if (strncmp(header.identification,"IWAD",4))
     {
-        LOG_F(WARNING, "Unable to load %s: file is truncated or missing IWAD id.", filename);
+        buildprintf("RTS file %s doesn't have IWAD id\n",filename);
         kclose(handle);
         return -1;
     }
-
     header.numlumps = B_LITTLE32(header.numlumps);
     header.infotableofs = B_LITTLE32(header.infotableofs);
-
     length = header.numlumps*sizeof(filelump_t);
-    fileinfo = fileinfoo = (filelump_t *)Xmalloc(length);
-
+    fileinfo = fileinfoo = (filelump_t*)Xmalloc(length);
+    if (!fileinfo)
+    {
+        buildprintf("RTS file could not allocate header info\n");
+        kclose(handle);
+        return -1;
+    }
     klseek(handle, header.infotableofs, SEEK_SET);
     kread(handle, fileinfo, length);
 
+//
+// Fill in lumpinfo
+//
+    lump_p = (lumpinfo_t*)Xrealloc(lumpinfo, (numlumps + header.numlumps)*sizeof(lumpinfo_t));
+    if (!lump_p)
     {
-        lumpinfo_t *lump_p = (lumpinfo_t *)Xrealloc(
-            rts_lumpinfo, (rts_numlumps + header.numlumps)*sizeof(lumpinfo_t));
-
-        rts_lumpinfo = lump_p;
+        kclose(handle);
+        return -1;
     }
+    lumpinfo = lump_p;
 
-    rts_numlumps += header.numlumps;
+    numlumps += header.numlumps;
 
-    for (i=startlump; i<rts_numlumps; i++, fileinfo++)
+    lump_p = &lumpinfo[startlump];
+
+    for (i=startlump; i<numlumps; i++,lump_p++, fileinfo++)
     {
-        lumpinfo_t *lump = &rts_lumpinfo[i];
-
-        lump->handle = handle;  // NOTE: cache1d-file is not closed!
-        lump->position = B_LITTLE32(fileinfo->filepos);
-        lump->size = B_LITTLE32(fileinfo->size);
-
-        Bstrncpy(lump->name, fileinfo->name, 8);
+        lump_p->handle = handle;
+        lump_p->position = B_LITTLE32(fileinfo->filepos);
+        lump_p->size = B_LITTLE32(fileinfo->size);
+        strncpy(lump_p->name, fileinfo->name, 8);
     }
 
     Xfree(fileinfoo);
@@ -101,72 +138,198 @@ static int32_t RTS_AddFile(const char *filename)
     return 0;
 }
 
+/*
+====================
+=
+= RTS_Init
+=
+= Files with a .rts extension are idlink files with multiple lumps
+=
+====================
+*/
 
-void RTS_Init(const char *filename)
+void RTS_Init(char *filename)
 {
+    int32_t length;
+    //
     // open all the files, load headers, and count lumps
+    //
+    numlumps = 0;
+    lumpinfo = NULL;   // will be realloced as lumps are added
 
-    rts_numlumps = 0;
-    rts_lumpinfo = NULL;   // will be realloced as lumps are added
+//   printf("RTS Manager Started\n");
+    if (RTS_AddFile(filename)) return;
 
-    if (RTS_AddFile(filename))
-        return;
+    if (!numlumps) return;
+//      buildprintf ("RTS_Init: no files found");
 
-    if (rts_numlumps == 0)
-        return;
-
-    rts_lumpcache = (void **)Xcalloc(rts_numlumps, sizeof(rts_lumpcache[0]));
-
-    RTS_Started = TRUE;
+    //
+    // set up caching
+    //
+    length = (numlumps) * sizeof(*lumpcache);
+    lumpcache = (intptr_t*)Xmalloc(length);
+    memset(lumpcache,0,length);
 }
 
+/*
+====================
+=
+= RTS_Shutdown
+=
+= shutdown the RTS system
+=
+====================
+*/
 
-int32_t RTS_IsInitialized(void)
+void RTS_Shutdown(void)
 {
-    return rts_numlumps > 0;
+    if (lumpcache)
+    {
+#if 0
+        int32_t i;
+
+        for (i=0; i<numlumps; i++)
+        {
+            if (lumpcache[i])
+            {
+                Xfree(lumpcache[i]);
+            }
+        }
+#endif
+        Xfree(lumpcache);
+    }
+    if (lumpinfo) Xfree(lumpinfo);
+
+    numlumps = 0;
+    lumpinfo = NULL;
+    lumpcache = NULL;
 }
 
 
-#define RTS_BAD_LUMP(lump) ((uint32_t)lump >= (uint32_t)rts_numlumps)
+/*
+====================
+=
+= RTS_NumSounds
+=
+====================
+*/
+
+int32_t RTS_NumSounds(void)
+{
+    return numlumps-1;
+}
+
+/*
+====================
+=
+= RTS_SoundLength
+=
+= Returns the buffer size needed to load the given lump
+=
+====================
+*/
 
 int32_t RTS_SoundLength(int32_t lump)
 {
     lump++;
-
-    return RTS_BAD_LUMP(lump) ? 0 : rts_lumpinfo[lump].size;
+    if (lump >= numlumps)
+        buildprintf("RTS_SoundLength: %i >= numlumps",lump);
+    return lumpinfo[lump].size;
 }
 
+/*
+====================
+=
+= RTS_GetSoundName
+=
+====================
+*/
 
-/* Loads the lump into the given buffer, which must be >= RTS_SoundLength() */
-static void RTS_ReadLump(int32_t lump, void *dest)
+char *RTS_GetSoundName(int32_t i)
 {
-    lumpinfo_t *l = &rts_lumpinfo[lump];
-
-    klseek(l->handle, l->position, SEEK_SET);
-    kread(l->handle, dest, l->size);
+    i++;
+    if (i>=numlumps)
+        buildprintf("RTS_GetSoundName: %i >= numlumps",i);
+    return &(lumpinfo[i].name[0]);
 }
 
+/*
+====================
+=
+= RTS_ReadLump
+=
+= Loads the lump into the given buffer, which must be >= RTS_SoundLength()
+=
+====================
+*/
+void RTS_ReadLump(int32_t lump, intptr_t dest)
+{
+    lumpinfo_t *l;
+
+    if (lump >= numlumps)
+        buildprintf("RTS_ReadLump: %i >= numlumps",lump);
+    if (lump < 0)
+        buildprintf("RTS_ReadLump: %i < 0",lump);
+    l = lumpinfo+lump;
+    klseek(l->handle, l->position, SEEK_SET);
+    kread(l->handle,(void *)dest,l->size);
+}
+
+#if 1
+/*
+====================
+=
+= RTS_GetSound
+=
+====================
+*/
+
+// allocates off the cache
 
 void *RTS_GetSound(int32_t lump)
 {
     lump++;
+    if ((uint16_t)lump >= (uint16_t)numlumps)
+        buildprintf("RTS_GetSound: %i >= %i\n",lump,numlumps);
 
-    if (RTS_BAD_LUMP(lump))
-        return NULL;
-
-    if (rts_lumpcache[lump] == NULL)
+    if (lumpcache[lump] == (intptr_t)NULL)
     {
-        rts_lumplockbyte[lump] = CACHE1D_LOCKED;
-        g_cache.allocateBlock((intptr_t *)&rts_lumpcache[lump], RTS_SoundLength(lump-1), &rts_lumplockbyte[lump]);  // JBF 20030910: char * => int32_t *
-        RTS_ReadLump(lump, rts_lumpcache[lump]);
+        lumplockbyte[lump] = CACHE_LOCK_START;
+        g_cache.allocateBlock(&lumpcache[lump],(int)RTS_SoundLength(lump-1),&lumplockbyte[lump]);
+        RTS_ReadLump(lump, lumpcache[lump]);
     }
     else
     {
-        if (rts_lumplockbyte[lump] < CACHE1D_LOCKED)
-            rts_lumplockbyte[lump] = CACHE1D_LOCKED;
+        if (lumplockbyte[lump] < CACHE_LOCK_START)
+            lumplockbyte[lump] = CACHE_LOCK_START;
         else
-            rts_lumplockbyte[lump]++;
+            lumplockbyte[lump]++;
     }
-
-    return rts_lumpcache[lump];
+    return (void *)lumpcache[lump];
 }
+#else
+/*
+====================
+=
+= RTS_GetSound
+=
+====================
+*/
+void *RTS_GetSound(int32_t lump)
+{
+    lump++;
+    if ((uint16_t)lump >= numlumps)
+        buildprintf("RTS_GetSound: %i >= numlumps",lump);
+
+    else if (lump < 0)
+        buildprintf("RTS_GetSound: %i < 0\n",lump);
+
+    if (lumpcache[lump] == NULL)
+    {
+        // read the lump in
+        lumpcache[lump] = Xmalloc(RTS_SoundLength(lump-1));
+        RTS_ReadLump(lump, lumpcache[lump]);
+    }
+    return (void *)lumpcache[lump];
+}
+#endif

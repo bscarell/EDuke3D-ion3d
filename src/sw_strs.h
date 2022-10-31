@@ -24,24 +24,26 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
 
-#define TEXT_INFO_TIME (3)
-#define TEXT_INFO_X (16)
-//#define TEXT_INFO_Y (20)
-#define TEXT_INFO_Y (40)
-#define TEXT_INFO_YOFF (10)
-#define TEXT_INFO_LINE(line) (TEXT_INFO_Y + ((line) * TEXT_INFO_YOFF))
-//#define TEXT_INFO_LINE(line) (TEXT_INFO_Y + ((line) * TEXT_INFO_YOFF) + GlobalInfoLineOffset)
+#define S_INAGAME   "YOU ARE IN A GAME!"
+#define S_PRESSKEY  "PRESS ANY KEY WHEN READY"
+#define S_MESSAGEON "GAME MESSAGES ARE NOW ON"
+#define S_MESSAGEOFF "GAME MESSAGES ARE NOW OFF"
 
-void DisplayFragNames(PLAYERp pp);
-void DisplayMiniBarSmString(PLAYERp pp,short xs,short ys, short pal, const char *buffer);
-void DisplaySmString(PLAYERp pp, short xs, short ys, short pal, const char *buffer);
-void DisplayMiniBarNumber(short xs,short ys,int number);
-void DisplaySummaryString(PLAYERp pp,short xs,short ys,short color,short shade,const char *buffer);
-void DisplayPanelNumber(PLAYERp pp,short xs,short ys,int number);
-void PutStringInfo(PLAYERp pp, const char *string);
-void PutStringInfoLine(PLAYERp pp, const char *string);
-void PutStringInfoLine2(PLAYERp pp, const char *string);
-void pClearTextLine(PLAYERp pp,long y);
-void pMenuClearTextLine(PLAYERp pp);
+#define S_QUITYN "PRESS (Y) TO QUIT, (N) TO FIGHT ON."
+#define S_QUIT1  "CONFUCIOUS SAY, 'HE WHO QUITS,"
+#define S_QUIT1A "TOTALLY SUCKS!'"
+#define S_QUIT2  "GO AHEAD, LEAVE, BUT WHILE YOU'RE"
+#define S_QUIT2A "GONE, EVIL WILL BE TAKING OVER!"
+#define S_QUIT3  "ALL OF JAPAN IS COUNTING ON YOU!"
+#define S_QUIT3A "ONLY A LOSER COULD LET THEM DOWN."
+#define S_QUIT4  "THIS IS TOO MUCH!  NOW WHERE"
+#define S_QUIT4A "DID I PUT THOSE CHEAT CODES?"
+#define S_QUIT5  "PRESS (Y) TO RUN HOME TO MOMMY,"
+#define S_QUIT5A "(N) TO BE A MAN."
+#define S_QUIT6  "YOU DO KNOW, THAT WHILE YOU'RE"
+#define S_QUIT6A "AWAY, WE'LL BE RESTOCKING MT. FUJI"
+#define S_QUIT6B "WITH A MILLION NEW MONSTERS?"
+#define S_QUIT7  "COME BACK ANY TIME, WE ARE ALWAYS"
+#define S_QUIT7A "LOOKING FOR A SACK OF RIPPER CHOW!"
+#define S_QUIT8  "LET'S MAKE A STEALTHY EXIT TO DOS!"
 
-void StringTimer(PANEL_SPRITEp psp);

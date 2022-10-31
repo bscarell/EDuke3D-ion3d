@@ -21,15 +21,18 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //-------------------------------------------------------------------------
 
 #include "build.h"
-#include "cmdline.h"
 #include "common.h"
 #include "common_game.h"
 #include "compat.h"
-#include "duke3d.h"
 #include "dynamicgtk.h"
 #include "game.h"
 #include "grpscan.h"
 #include "gtkpixdata.h"
+#include "config.h"
+
+#if defined POLYMER && 0
+# define POLYMEROPTION
+#endif
 
 enum
 {
@@ -67,15 +70,12 @@ static struct
     GtkWidget *vmode3dlabel;
     GtkWidget *vmode3dcombo;
     GtkWidget *fullscreencheck;
-#ifdef POLYMER
+#ifdef POLYMEROPTION
     GtkWidget *polymercheck;
 #endif
     GtkWidget *inputdevlabel;
     GtkWidget *inputdevcombo;
-    GtkWidget *custommodlabel;
-    GtkWidget *custommodcombo;
     GtkWidget *emptyhlayout;
-    GtkWidget *autoloadcheck;
     GtkWidget *alwaysshowcheck;
     GtkWidget *configtab;
     GtkWidget *gamevlayout;
@@ -102,9 +102,8 @@ static struct
 static struct
 {
     grpfile_t const * grp;
-    char *gamedir;
     ud_setup_t shared;
-#ifdef POLYMER
+#ifdef POLYMEROPTION
     int polymer;
 #endif
 } settings;
@@ -138,7 +137,7 @@ static void on_fullscreencheck_toggled(GtkToggleButton *togglebutton, gpointer u
     PopulateForm(POPULATE_VIDEO);
 }
 
-#ifdef POLYMER
+#ifdef POLYMEROPTION
 static void on_polymercheck_toggled(GtkToggleButton *togglebutton, gpointer user_data)
 {
     UNREFERENCED_PARAMETER(user_data);
@@ -170,32 +169,6 @@ static void on_inputdevcombo_changed(GtkComboBox *combobox, gpointer user_data)
     case 2:	settings.shared.usemouse = 0; settings.shared.usejoystick = 1; break;
     case 3:	settings.shared.usemouse = 1; settings.shared.usejoystick = 1; break;
     }
-}
-
-static void on_custommodcombo_changed(GtkComboBox *combobox, gpointer user_data)
-{
-    GtkTreeIter iter;
-    GtkTreeModel *model;
-    GtkTreePath *path;
-    char *value;
-    UNREFERENCED_PARAMETER(user_data);
-
-    if (gtk_combo_box_get_active_iter(combobox, &iter))
-    {
-        model = gtk_combo_box_get_model(combobox);
-        gtk_tree_model_get(model, &iter, 0,&value, -1);
-        path = gtk_tree_model_get_path(model, &iter);
-
-        if (*gtk_tree_path_get_indices(path) == NONE)
-            settings.gamedir = NULL;
-        else settings.gamedir = value;
-    }
-}
-
-static void on_autoloadcheck_toggled(GtkToggleButton *togglebutton, gpointer user_data)
-{
-    UNREFERENCED_PARAMETER(user_data);
-    settings.shared.noautoload = !gtk_toggle_button_get_active(togglebutton);
 }
 
 static void on_alwaysshowcheck_toggled(GtkToggleButton *togglebutton, gpointer user_data)
@@ -266,45 +239,6 @@ static void SetPage(int32_t n)
                           (gpointer)&n);
 }
 
-static unsigned char GetModsDirNames(GtkListStore *list)
-{
-    char *homedir;
-    char pdir[BMAX_PATH];
-    unsigned char iternumb = 0;
-    BUILDVFS_FIND_REC *dirs = NULL;
-    GtkTreeIter iter;
-
-    pathsearchmode = 1;
-
-    if ((homedir = Bgethomedir()))
-    {
-        if (buildvfs_exists("user_profiles_disabled"))
-            buildvfs_getcwd(pdir, sizeof(pdir));
-        else
-            Bsnprintf(pdir, sizeof(pdir), "%s/" ".config/eduke32", homedir);
-
-        dirs = klistpath(pdir, "*", BUILDVFS_FIND_DIR);
-        for (; dirs != NULL; dirs=dirs->next)
-        {
-            if ((Bstrcmp(dirs->name, "autoload") == 0) ||
-                    (Bstrcmp(dirs->name, "..") == 0) ||
-                    (Bstrcmp(dirs->name, ".") == 0))
-                continue;
-            else
-            {
-                gtk_list_store_append(list, &iter);
-                gtk_list_store_set(list, &iter, 0,dirs->name, -1);
-                iternumb++;
-            }
-        }
-    }
-
-    klistfree(dirs);
-    dirs = NULL;
-
-    return iternumb;
-}
-
 static void PopulateForm(unsigned char pgs)
 {
     if ((pgs == ALL) || (pgs == POPULATE_VIDEO))
@@ -351,11 +285,8 @@ static void PopulateForm(unsigned char pgs)
 
     if ((pgs == ALL) || (pgs == POPULATE_CONFIG))
     {
-        GtkListStore *devlist, *modsdir;
         GtkTreeIter iter;
-        GtkTreePath *path;
-        char *value;
-        unsigned char i, r = 0;
+        unsigned char i;
         const char *availabledev[] =
         {
             "Keyboard only",
@@ -365,7 +296,7 @@ static void PopulateForm(unsigned char pgs)
         };
 
         // populate input devices combo
-        devlist = GTK_LIST_STORE(gtk_combo_box_get_model(GTK_COMBO_BOX(stwidgets.inputdevcombo)));
+        GtkListStore * devlist = GTK_LIST_STORE(gtk_combo_box_get_model(GTK_COMBO_BOX(stwidgets.inputdevcombo)));
         gtk_list_store_clear(devlist);
 
         for (i=0; i<(int32_t)G_N_ELEMENTS(availabledev); i++)
@@ -387,42 +318,11 @@ static void PopulateForm(unsigned char pgs)
             break;
         }
 
-        // populate custom mod combo
-        modsdir = GTK_LIST_STORE(gtk_combo_box_get_model(GTK_COMBO_BOX(stwidgets.custommodcombo)));
-        gtk_list_store_clear(modsdir);
-
-        gtk_list_store_append(modsdir, &iter);
-        gtk_list_store_set(modsdir, &iter, 0,"None", -1);
-        r = GetModsDirNames(modsdir);
-
-        for (i=0; i<=r; i++)
-        {
-            path = gtk_tree_path_new_from_indices(i, -1);
-            gtk_tree_model_get_iter(GTK_TREE_MODEL(modsdir), &iter, path);
-            gtk_tree_model_get(GTK_TREE_MODEL(modsdir), &iter, 0,&value, -1);
-
-            if (Bstrcmp(settings.gamedir, "/") == 0)
-            {
-                gtk_combo_box_set_active(GTK_COMBO_BOX(stwidgets.custommodcombo), NONE);
-                settings.gamedir = NULL;
-
-                break;
-            }
-            if (Bstrcmp(settings.gamedir, value) == 0)
-            {
-                gtk_combo_box_set_active_iter(GTK_COMBO_BOX(stwidgets.custommodcombo),
-                                              &iter);
-
-                break;
-            }
-        }
-
         // populate check buttons
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(stwidgets.fullscreencheck), settings.shared.fullscreen);
-#ifdef POLYMER
+#ifdef POLYMEROPTION
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(stwidgets.polymercheck), settings.polymer);
 #endif
-        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(stwidgets.autoloadcheck), !settings.shared.noautoload);
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(stwidgets.alwaysshowcheck), settings.shared.forcesetup);
     }
 
@@ -505,7 +405,7 @@ static GtkWidget *create_window(void)
     // 3D video mode LabelText
     stwidgets.vmode3dlabel = gtk_label_new_with_mnemonic("_Video mode:");
     gtk_misc_set_alignment(GTK_MISC(stwidgets.vmode3dlabel), 0.3, 0);
-#ifdef POLYMER
+#ifdef POLYMEROPTION
     gtk_table_attach(GTK_TABLE(stwidgets.configtlayout), stwidgets.vmode3dlabel, 0,1, 0,1, GTK_FILL, (GtkAttachOptions)0, 4, 0);
 #else
     gtk_table_attach(GTK_TABLE(stwidgets.configtlayout), stwidgets.vmode3dlabel, 0,1, 0,1, GTK_FILL, (GtkAttachOptions)0, 4, 7);
@@ -524,7 +424,7 @@ static GtkWidget *create_window(void)
         gtk_cell_layout_set_attributes(GTK_CELL_LAYOUT(stwidgets.vmode3dcombo), cell, "text", 0, nullptr);
     }
 
-#ifdef POLYMER
+#ifdef POLYMEROPTION
    gtk_table_attach(GTK_TABLE(stwidgets.configtlayout), stwidgets.vmode3dcombo, 1,2, 0,1,
        (GtkAttachOptions)(GTK_EXPAND | GTK_FILL), (GtkAttachOptions)0, 4, 0);
 #else
@@ -533,7 +433,7 @@ static GtkWidget *create_window(void)
 
     // Fullscreen checkbox
     stwidgets.displayvlayout = gtk_vbox_new(TRUE, 0);
-#ifdef POLYMER
+#ifdef POLYMEROPTION
     gtk_table_attach(GTK_TABLE(stwidgets.configtlayout), stwidgets.displayvlayout, 2,3, 0,1, GTK_FILL, (GtkAttachOptions)0, 4, 0);
 #else
     gtk_table_attach(GTK_TABLE(stwidgets.configtlayout), stwidgets.displayvlayout, 2,3, 0,1, GTK_FILL, (GtkAttachOptions)0, 4, 7);
@@ -542,7 +442,7 @@ static GtkWidget *create_window(void)
     stwidgets.fullscreencheck = gtk_check_button_new_with_mnemonic("_Fullscreen");
     gtk_box_pack_start(GTK_BOX(stwidgets.displayvlayout), stwidgets.fullscreencheck, FALSE, FALSE, 0);
 
-#ifdef POLYMER
+#ifdef POLYMEROPTION
     // Polymer checkbox
     stwidgets.polymercheck = gtk_check_button_new_with_mnemonic("_Polymer");
     gtk_box_pack_start(GTK_BOX(stwidgets.displayvlayout), stwidgets.polymercheck, FALSE, FALSE, 0);
@@ -568,34 +468,10 @@ static GtkWidget *create_window(void)
     gtk_table_attach(GTK_TABLE(stwidgets.configtlayout), stwidgets.inputdevcombo, 1,2, 1,2,
         (GtkAttachOptions)(GTK_EXPAND | GTK_FILL), (GtkAttachOptions)0, 4, 0);
 
-    // Custom mod LabelText
-    stwidgets.custommodlabel = gtk_label_new_with_mnemonic("Custom _game:");
-    gtk_misc_set_alignment(GTK_MISC(stwidgets.custommodlabel), 0.3, 0);
-    gtk_table_attach(GTK_TABLE(stwidgets.configtlayout), stwidgets.custommodlabel, 0,1, 2,3, GTK_FILL, (GtkAttachOptions)0, 4, 7);
-
-    // Custom mod combo
-    {
-        GtkListStore *list = gtk_list_store_new(1, G_TYPE_STRING);
-        GtkCellRenderer *cell;
-
-        stwidgets.custommodcombo = gtk_combo_box_new_with_model(GTK_TREE_MODEL(list));
-        g_object_unref(G_OBJECT(list));
-
-        cell = gtk_cell_renderer_text_new();
-        gtk_cell_layout_pack_start(GTK_CELL_LAYOUT(stwidgets.custommodcombo), cell, FALSE);
-        gtk_cell_layout_set_attributes(GTK_CELL_LAYOUT(stwidgets.custommodcombo), cell, "text", 0, nullptr);
-    }
-    gtk_table_attach(GTK_TABLE(stwidgets.configtlayout), stwidgets.custommodcombo, 1,2, 2,3,
-        (GtkAttachOptions)(GTK_EXPAND | GTK_FILL), (GtkAttachOptions)0, 4, 7);
-
     // Empty horizontal layout
     stwidgets.emptyhlayout = gtk_hbox_new(TRUE, 0);
     gtk_table_attach(GTK_TABLE(stwidgets.configtlayout), stwidgets.emptyhlayout, 0,3, 3,4, (GtkAttachOptions)0,
         (GtkAttachOptions)(GTK_EXPAND | GTK_FILL), 4, 0);
-
-    // Autoload checkbox
-    stwidgets.autoloadcheck = gtk_check_button_new_with_mnemonic("_Enable \"autoload\" folder");
-    gtk_table_attach(GTK_TABLE(stwidgets.configtlayout), stwidgets.autoloadcheck, 0,3, 4,5, GTK_FILL, (GtkAttachOptions)0, 2, 2);
 
     // Always show config checkbox
     stwidgets.alwaysshowcheck = gtk_check_button_new_with_mnemonic("_Always show this window at startup");
@@ -720,19 +596,13 @@ static GtkWidget *create_window(void)
     g_signal_connect((gpointer) stwidgets.fullscreencheck, "toggled",
                      G_CALLBACK(on_fullscreencheck_toggled),
                      NULL);
-#ifdef POLYMER
+#ifdef POLYMEROPTION
     g_signal_connect((gpointer) stwidgets.polymercheck, "toggled",
                      G_CALLBACK(on_polymercheck_toggled),
                      NULL);
 #endif
     g_signal_connect((gpointer) stwidgets.inputdevcombo, "changed",
                      G_CALLBACK(on_inputdevcombo_changed),
-                     NULL);
-    g_signal_connect((gpointer) stwidgets.custommodcombo, "changed",
-                     G_CALLBACK(on_custommodcombo_changed),
-                     NULL);
-    g_signal_connect((gpointer) stwidgets.autoloadcheck, "toggled",
-                     G_CALLBACK(on_autoloadcheck_toggled),
                      NULL);
     g_signal_connect((gpointer) stwidgets.alwaysshowcheck, "toggled",
                      G_CALLBACK(on_alwaysshowcheck_toggled),
@@ -754,7 +624,6 @@ static GtkWidget *create_window(void)
     // Associate labels with their controls
     gtk_label_set_mnemonic_widget(GTK_LABEL(stwidgets.vmode3dlabel), stwidgets.vmode3dcombo);
     gtk_label_set_mnemonic_widget(GTK_LABEL(stwidgets.inputdevlabel), stwidgets.inputdevcombo);
-    gtk_label_set_mnemonic_widget(GTK_LABEL(stwidgets.custommodlabel), stwidgets.custommodcombo);
     gtk_label_set_mnemonic_widget(GTK_LABEL(stwidgets.gamelabel), stwidgets.gamelist);
 
     return stwidgets.startwin;
@@ -869,10 +738,9 @@ int32_t startwin_run(void)
 
     SetPage(TAB_CONFIG);
 
-    settings.shared = ud.setup;
-    settings.gamedir = g_modDir;
+    settings.shared = ud_setup;
     settings.grp = g_selectedGrp;
-#ifdef POLYMER
+#ifdef POLYMEROPTION
     settings.polymer = (glrendmode == REND_POLYMER) & (settings.shared.bpp != 8);
 #endif
     PopulateForm(ALL);
@@ -882,13 +750,12 @@ int32_t startwin_run(void)
     SetPage(TAB_MESSAGES);
     if (retval) // launch the game with these parameters
     {
-        ud.setup = settings.shared;
-#ifdef POLYMER
+        ud_setup = settings.shared;
+#ifdef POLYMEROPTION
         glrendmode = (settings.polymer) ? REND_POLYMER : REND_POLYMOST;
 #endif
         g_selectedGrp = settings.grp;
 
-        Bstrcpy(g_modDir, (g_noSetup == 0 && settings.gamedir != NULL) ? settings.gamedir : "/");
     }
 
     return retval;

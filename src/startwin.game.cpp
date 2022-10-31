@@ -24,36 +24,30 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #error Only for Windows
 #endif
 
-#include "renderlayer.h"
-
-#ifdef STARTUP_SETUP_WINDOW
+#include "build.h"
 
 #define NEED_WINDOWSX_H
 #define NEED_COMMCTRL_H
-#define ONLY_USERDEFS
-
-#include "_control.h"
-#include "build.h"
-#include "cache1d.h"
-#include "cmdline.h"
-#include "common_game.h"
-#include "compat.h"
-#include "control.h"
-#include "function.h"
-#include "game.h"
-#include "grpscan.h"
-#include "inv.h"
-#include "keyboard.h"
-#include "startwin.game.h"
 #include "windows_inc.h"
+
+#include "renderlayer.h"
+
+#include "common.h"
+#include "common_game.h"
+
+#include "gamedefs.h"
+#include "config.h"
+
+#include "grpscan.h"
+
+#include "startwin.game.h"
 
 #define TAB_CONFIG 0
 #define TAB_MESSAGES 1
 
 static struct
 {
-    struct grpfile_t const * grp;
-    char *gamedir;
+    grpfile_t const * grp;
     ud_setup_t shared;
     int polymer;
 }
@@ -64,24 +58,9 @@ static HWND pages[3];
 static int done = -1;
 static int mode = TAB_CONFIG;
 
-static BUILDVFS_FIND_REC *finddirs;
-
-static inline void clearfilenames(void)
-{
-    klistfree(finddirs);
-    finddirs = NULL;
-}
-
-static inline void getfilenames(char const *path)
-{
-    clearfilenames();
-    finddirs = klistpath(path,"*",BUILDVFS_FIND_DIR);
-}
-
 #define POPULATE_VIDEO 1
 #define POPULATE_CONFIG 2
 #define POPULATE_GAME 4
-#define POPULATE_GAMEDIRS 8
 
 #ifdef INPUT_MOUSE
 #undef INPUT_MOUSE
@@ -97,34 +76,6 @@ const char *controlstrings[] = { "Keyboard only", "Keyboard and mouse", "Keyboar
 static void PopulateForm(int32_t pgs)
 {
     char buf[512];
-
-    if (pgs & POPULATE_GAMEDIRS)
-    {
-        HWND hwnd = GetDlgItem(pages[TAB_CONFIG], IDCGAMEDIR);
-
-        getfilenames("/");
-        (void)ComboBox_ResetContent(hwnd);
-        int const r = ComboBox_AddString(hwnd, "None");
-        (void)ComboBox_SetItemData(hwnd, r, 0);
-        (void)ComboBox_SetCurSel(hwnd, r);
-        auto dirs = finddirs;
-        for (int i=1, j=1; dirs != NULL; dirs=dirs->next)
-        {
-            if (Bstrcasecmp(dirs->name, "autoload") == 0)
-            {
-                j++;
-                continue;
-            }
-
-            (void)ComboBox_AddString(hwnd, dirs->name);
-            (void)ComboBox_SetItemData(hwnd, i, j);
-            if (Bstrcasecmp(dirs->name, settings.gamedir) == 0)
-                (void)ComboBox_SetCurSel(hwnd, i);
-
-            i++;
-            j++;
-        }
-    }
 
     if (pgs & POPULATE_VIDEO)
     {
@@ -171,7 +122,6 @@ static void PopulateForm(int32_t pgs)
     if (pgs & POPULATE_CONFIG)
     {
         Button_SetCheck(GetDlgItem(pages[TAB_CONFIG], IDCALWAYSSHOW), (settings.shared.forcesetup ? BST_CHECKED : BST_UNCHECKED));
-        Button_SetCheck(GetDlgItem(pages[TAB_CONFIG], IDCAUTOLOAD), (!(settings.shared.noautoload) ? BST_CHECKED : BST_UNCHECKED));
 
         HWND hwnd = GetDlgItem(pages[TAB_CONFIG], IDCINPUT);
 
@@ -251,8 +201,6 @@ static INT_PTR CALLBACK ConfigPageProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, L
         case IDCALWAYSSHOW:
             settings.shared.forcesetup = IsDlgButtonChecked(hwndDlg, IDCALWAYSSHOW) == BST_CHECKED;
             return TRUE;
-        case IDCAUTOLOAD:
-            settings.shared.noautoload = (IsDlgButtonChecked(hwndDlg, IDCAUTOLOAD) != BST_CHECKED);
             return TRUE;
         case IDCINPUT:
             if (HIWORD(wParam) == CBN_SELCHANGE)
@@ -282,30 +230,6 @@ static INT_PTR CALLBACK ConfigPageProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, L
             }
             return TRUE;
 
-        case IDCGAMEDIR:
-            if (HIWORD(wParam) == CBN_SELCHANGE)
-            {
-                int i = ComboBox_GetCurSel((HWND)lParam);
-                if (i != CB_ERR) i = ComboBox_GetItemData((HWND)lParam, i);
-                if (i != CB_ERR)
-                {
-                    if (i==0)
-                        settings.gamedir = NULL;
-                    else
-                    {
-                        BUILDVFS_FIND_REC *dir = finddirs;
-                        for (int j = 1; dir != NULL; dir = dir->next, j++)
-                        {
-                            if (j == i)
-                            {
-                                settings.gamedir = dir->name;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            return TRUE;
         case IDCDATA:
         {
             if (HIWORD(wParam) != LBN_SELCHANGE) break;
@@ -346,7 +270,6 @@ static void EnableConfig(bool n)
     EnableWindow(GetDlgItem(startupdlg, WIN_STARTWIN_START), n);
     EnableWindow(GetDlgItem(pages[TAB_CONFIG], IDCDATA), n);
     EnableWindow(GetDlgItem(pages[TAB_CONFIG], IDCFULLSCREEN), n);
-    EnableWindow(GetDlgItem(pages[TAB_CONFIG], IDCGAMEDIR), n);
     EnableWindow(GetDlgItem(pages[TAB_CONFIG], IDCINPUT), n);
     EnableWindow(GetDlgItem(pages[TAB_CONFIG], IDCPOLYMER), n);
     EnableWindow(GetDlgItem(pages[TAB_CONFIG], IDCVMODE), n);
@@ -407,7 +330,6 @@ static INT_PTR CALLBACK startup_dlgproc(HWND hwndDlg, UINT uMsg, WPARAM wParam, 
         hbmp = LoadBitmap((HINSTANCE)win_gethinstance(), MAKEINTRESOURCE(RSRC_BMP));
 
         HWND hwnd = GetDlgItem(hwndDlg, WIN_STARTWIN_BITMAP);
-        SendMessage(hwnd, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)hbmp);
 
         RECT r;
         GetClientRect(hwnd, &r);
@@ -543,6 +465,35 @@ static INT_PTR CALLBACK startup_dlgproc(HWND hwndDlg, UINT uMsg, WPARAM wParam, 
             return (BOOL)(intptr_t)GetSysColorBrush(COLOR_WINDOW);
         break;
 
+    case WM_PAINT:
+    {
+        // manually paint the banner with antialiasing
+        HWND hwnd = GetDlgItem(hwndDlg, WIN_STARTWIN_BITMAP);
+
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+
+        if (ps.rcPaint.right > ps.rcPaint.left && ps.rcPaint.bottom > ps.rcPaint.top)
+        {
+            RECT r;
+            GetClientRect(hwnd, &r);
+
+            BITMAP bm;
+            GetObject(hbmp, sizeof(BITMAP), &bm);
+
+            HDC hdcbmp = CreateCompatibleDC(hdc);
+            SelectObject(hdcbmp, hbmp);
+
+            SetStretchBltMode(hdc, HALFTONE);
+            StretchBlt(hdc, r.left,r.top,r.right,r.bottom, hdcbmp, 0,0,bm.bmWidth,bm.bmHeight, SRCCOPY);
+
+            DeleteDC(hdcbmp);
+        }
+
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
     default:
         break;
     }
@@ -673,9 +624,8 @@ int32_t startwin_run(void)
     settings.polymer = 0;
 #endif
 
-    settings.shared = ud.setup;
+    settings.shared = ud_setup;
     settings.grp = g_selectedGrp;
-    settings.gamedir = g_modDir;
 
     PopulateForm(-1);
 
@@ -705,16 +655,12 @@ int32_t startwin_run(void)
 
     if (done)
     {
-        ud.setup = settings.shared;
+        ud_setup = settings.shared;
 #ifdef USE_OPENGL
         glrendmode = (settings.polymer) ? REND_POLYMER : REND_POLYMOST;
 #endif
         g_selectedGrp = settings.grp;
-        if (g_modDir != settings.gamedir)
-            Bstrcpy(g_modDir, (g_noSetup == 0 && settings.gamedir != NULL) ? settings.gamedir : "/");
     }
 
     return done;
 }
-
-#endif // STARTUP_SETUP_WINDOW
