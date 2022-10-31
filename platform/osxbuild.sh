@@ -191,16 +191,15 @@ if [ `expr $darwinversion \> 10` == 1 ]; then
 fi
 
 # Detect versioning systems and pull the revision number:
-rev=$(svn info 2> /dev/null | grep Revision | awk '{ print $2 }')
+export VC_REV=$(svn info 2> /dev/null | grep Revision | awk '{ print $2 }')
 vc=svn
-if [ -z "$rev" ]; then
+if [ -z "$VC_REV" ]; then
     vc=git
-    rev=$(git log | grep 'git-svn-id:' | head -n 1 | sed -E 's/.*\@([0-9]+).*/\1/')
-    echo "Detected git repository, revision r$rev"
+    export VC_REV=$(git svn info 2> /dev/null | grep Revision | awk '{ print $2 }')
 fi
 
-if [ -z "$rev" ]; then
-    rev=unknown
+if [ -z "$VC_REV" ]; then
+    export VC_REV=Unknown
     vc=none
 fi
 
@@ -233,7 +232,7 @@ function dobuildem()  # build EDuke32 and Mapster32
 }
 
 # A little factoring:
-commonargs="OSX_STARTUPWINDOW=1 WITHOUT_GTK=1"
+commonargs="WITHOUT_GTK=1"
 if [ $buildppc == 1 ] || [ `expr $darwinversion = 9` == 1 ]; then
     commonargs="$commonargs DARWIN9=1"
 fi
@@ -260,31 +259,31 @@ if [ $buildtools$installtools != 00 ] && [ -d "build" ]; then
         if [ $build64 == 1 ]; then
             if [ $builddebug == 1 ]; then
                 dobuildtools "x86_64 debug" \
-                    "ARCH='-arch x86_64' EXESUFFIX_OVERRIDE=.debug.x64 $commonargs RELEASE=0 BUILD32_ON_64=0 USE_LIBVPX=1 $makecmd utils"
+                    "ARCH=x86_64 EXESUFFIX_OVERRIDE=.debug.x64 $commonargs RELEASE=0 USE_LIBVPX=1 $makecmd utils"
             fi
 
             dobuildtools "x86_64 release" \
-                "ARCH='-arch x86_64' EXESUFFIX_OVERRIDE=.x64 $commonargs RELEASE=1 BUILD32_ON_64=0 USE_LIBVPX=1 $makecmd utils"
+                "ARCH=x86_64 EXESUFFIX_OVERRIDE=.x64 $commonargs RELEASE=1 USE_LIBVPX=1 $makecmd utils"
         fi
 
         if [ $build86 == 1 ]; then
             if [ $builddebug == 1 ]; then
                 dobuildtools "x86 debug" \
-                    "EXESUFFIX_OVERRIDE=.debug.x86 $commonargs RELEASE=0 BUILD32_ON_64=1 USE_LIBVPX=0 $makecmd utils"
+                    "ARCH=i386 EXESUFFIX_OVERRIDE=.debug.x86 $commonargs RELEASE=0 USE_LIBVPX=0 $makecmd utils"
             fi
 
             dobuildtools "x86 release" \
-                "EXESUFFIX_OVERRIDE=.x86 $commonargs RELEASE=1 BUILD32_ON_64=1 USE_LIBVPX=0 $makecmd utils"
+                "ARCH=i386 EXESUFFIX_OVERRIDE=.x86 $commonargs RELEASE=1 USE_LIBVPX=0 $makecmd utils"
         fi
 
         if [ $buildppc == 1 ]; then
             if [ $builddebug == 1 ]; then
                 dobuildtools "PowerPC debug" \
-                    "ARCH='-arch ppc' EXESUFFIX_OVERRIDE=.debug.ppc $commonargs RELEASE=0 BUILD32_ON_64=0 USE_LIBVPX=0 $makecmd utils"
+                    "ARCH=ppc EXESUFFIX_OVERRIDE=.debug.ppc $commonargs RELEASE=0 USE_LIBVPX=0 $makecmd utils"
             fi
 
             dobuildtools "PowerPC release" \
-                "ARCH='-arch ppc' EXESUFFIX_OVERRIDE=.ppc $commonargs RELEASE=1 BUILD32_ON_64=0 USE_LIBVPX=0 $makecmd utils"
+                "ARCH=ppc EXESUFFIX_OVERRIDE=.ppc $commonargs RELEASE=1 USE_LIBVPX=0 $makecmd utils"
         fi
 
         mkdir -p tools
@@ -344,28 +343,28 @@ if [ $buildmain == 1 ]; then
 
     if [ $build64 == 1 ]; then
         if [ $builddebug == 1 ]; then
-            dobuildem debug.x64 "ARCH='-arch x86_64' $commonargs RELEASE=0 BUILD32_ON_64=0 $makecmd"
+            dobuildem debug.x64 "ARCH=x86_64 $commonargs RELEASE=0 $makecmd"
         fi
 
         if [ $buildrelease == 1 ]; then
-            dobuildem x64 "ARCH='-arch x86_64' $commonargs RELEASE=1 BUILD32_ON_64=0 $makecmd"
+            dobuildem x64 "ARCH=x86_64 $commonargs RELEASE=1 $makecmd"
         fi
     fi
 
     if [ $build86 == 1 ]; then
         if [ $builddebug == 1 ]; then
-            dobuildem debug.x86 "$commonargs RELEASE=0 BUILD32_ON_64=1 USE_LIBPNG=0 USE_LIBVPX=0 $makecmd"
+            dobuildem debug.x86 "ARCH=i386 $commonargs RELEASE=0 USE_LIBPNG=0 USE_LIBVPX=0 $makecmd"
         fi
 
-        dobuildem x86 "$commonargs RELEASE=1 BUILD32_ON_64=1 USE_LIBPNG=0 USE_LIBVPX=0 $makecmd"
+        dobuildem x86 "ARCH=i386 $commonargs RELEASE=1 USE_LIBPNG=0 USE_LIBVPX=0 $makecmd"
     fi
 
     if [ $buildppc == 1 ]; then
         if [ $builddebug == 1 ]; then
-            dobuildem debug.ppc "ARCH='-arch ppc' $commonargs RELEASE=0 BUILD32_ON_64=0 USE_LIBPNG=0 USE_LIBVPX=0 $makecmd"
+            dobuildem debug.ppc "ARCH=ppc $commonargs RELEASE=0 USE_LIBPNG=0 USE_LIBVPX=0 $makecmd"
         fi
 
-        dobuildem ppc "ARCH='-arch ppc' $commonargs RELEASE=1 BUILD32_ON_64=0 USE_LIBPNG=0 USE_LIBVPX=0 $makecmd"
+        dobuildem ppc "ARCH=ppc $commonargs RELEASE=1 USE_LIBPNG=0 USE_LIBVPX=0 $makecmd"
     fi
 fi
 
@@ -410,7 +409,7 @@ if [ $success == 1 ]; then
 
     # Output README.OSX:
     let "darwinversion -= 4"
-    echo "This archive was produced from revision $rev by the osxbuild.sh script." > README.OSX
+    echo "This archive was produced from revision ${VC_REV} by the osxbuild.sh script." > README.OSX
     echo "Built on: Mac OS X 10.$darwinversion" >> README.OSX
     echo "EDuke32 home: http://www.eduke32.com" >> README.OSX
     echo "OS X build discussion on Duke4.net: http://forums.duke4.net/topic/4242-building-eduke-on-mac-os-x/" >> README.OSX
@@ -423,18 +422,18 @@ if [ $success == 1 ]; then
         lastrevision=$(ls -A1 eduke32-osx* | tail -n1 | cut -d- -f3 | cut -d. -f1)
 
         if [ -z $lastrevision ]; then
-            let lastrevision=rev-1
-        elif [ $lastrevision -lt $rev ]; then
+            let lastrevision=VC_REV-1
+        elif [ $lastrevision -lt $VC_REV ]; then
             let lastrevision+=1
         else
-            let lastrevision=rev-1
+            let lastrevision=VC_REV-1
         fi
     fi
 
     echo "Using r$lastrevision as last revision for change log"
 
     if [ "$vc" == "svn" ]; then
-        svn log -r $rev:$lastrevision > Changelog.txt
+        svn log -r $VC_REV:$lastrevision > Changelog.txt
     elif [ "$vc" == "git" ]; then
         commitid=$(git log --grep="git-svn-id: .*@$lastrevision" -n 1 | grep -E '^commit ' | head -n 1 | awk '{print $2}')
         # Get the commit messages and strip the email addresses
@@ -443,7 +442,7 @@ if [ $success == 1 ]; then
 
     # Package
     if [ $pack == 1 ]; then
-        arfilename="eduke32-osx-$rev.zip"
+        arfilename="eduke32-osx-${VC_REV}.zip"
         echo "Packing distribution into $arfilename"
         rm -f "$arfilename"
         zip -r -y "$arfilename" * -x "*.svn*" "*.git*" "*.dll"

@@ -13,7 +13,7 @@
 	<key>CFBundleIconFile</key>
 	<string>eduke32.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.voidpoint.eduke32</string>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -33,10 +33,10 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.action-games</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright Voidpoint, LLC</string>
-	<key>NSMainNibFile</key>
-	<string>game.osxmain</string>
+	<string>Copyright EDuke32 contributors</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
 </dict>
 </plist>
