@@ -9,10 +9,10 @@
   <assemblyIdentity
       version="1.0.0.0"
       processorArchitecture="*"
-      name="EDuke32"
+      name="VoidSW"
       type="win32"
 />
-  <description>EDuke32</description>
+  <description>VoidSW</description>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity
