@@ -1,12 +1,13 @@
 //-------------------------------------------------------------------------
 /*
-Copyright (C) 2010 EDuke32 developers and contributors
+Copyright (C) 1997, 2005 - 3D Realms Entertainment
 
-This file is part of EDuke32.
+This file is part of Shadow Warrior version 1.2
 
-EDuke32 is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License version 2
-as published by the Free Software Foundation.
+Shadow Warrior is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,975 +18,599 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+Original Source: 1997 - Frank Maddin and Jim Norwood
+Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
 
+//#define MAIN
+//#define QUIET
+#include "build.h"
+#include "cache1d.h"
+
+#include "keys.h"
+#include "names2.h"
+#include "panel.h"
+#include "game.h"
+#include "network.h"
+
+#include "mytypes.h"
+#include "control.h"
+#include "function.h"
 #include "demo.h"
-#include "duke3d.h"
-#include "input.h"
+
+#include "player.h"
 #include "menus.h"
-#include "savegame.h"
-#include "screens.h"
 
-#include "vfs.h"
 
-char g_firstDemoFile[BMAX_PATH];
+DFILE DemoFileIn = DF_ERR;
+FILE *DemoFileOut;
+SWBOOL DemoPlaying = FALSE;
+SWBOOL DemoRecording = FALSE;
+SWBOOL DemoEdit = FALSE;
+SWBOOL DemoMode = FALSE;
+SWBOOL DemoModeMenuState = FALSE;
+char DemoFileName[16] = "demo.dmo";
+char DemoLevelName[16] = "";
+extern SWBOOL NewGame;
 
-buildvfs_FILE g_demo_filePtr{};  // write
-buildvfs_kfd g_demo_recFilePtr = buildvfs_kfd_invalid;  // read
+// Demo sync stuff
+FILE *DemoSyncFile;
+SWBOOL DemoSyncTest = FALSE, DemoSyncRecord = FALSE;
+char DemoTmpName[16] = "";
 
-int32_t g_demo_cnt;
-int32_t g_demo_goalCnt=0;
-int32_t g_demo_totalCnt;
-int32_t g_demo_paused=0;
-int32_t g_demo_rewind=0;
-int32_t g_demo_showStats=1;
-static int32_t g_demo_soundToggle;
+SW_PACKET DemoBuffer[DEMO_BUFFER_MAX];
+int DemoRecCnt = 0;                    // Can only record 1-player game
 
-static int32_t demo_hasdiffs, demorec_diffs=1, demorec_difftics = 2*REALGAMETICSPERSEC;
-int32_t demoplay_diffs=1;
-int32_t demorec_diffs_cvar=1;
-int32_t demorec_force_cvar=0;
-int32_t demorec_difftics_cvar = 2*REALGAMETICSPERSEC;
-int32_t demorec_diffcompress_cvar=1;
-int32_t demorec_synccompress_cvar=1;
-int32_t demorec_seeds_cvar=1;
-int32_t demoplay_showsync=1;
+SWBOOL DemoDone;
 
-static int32_t demo_synccompress=1, demorec_seeds=1, demo_hasseeds;
+void DemoWriteHeader(void);
+void DemoReadHeader(void);
+void DemoReadBuffer(void);
 
-static void Demo_RestoreModes(int32_t menu)
+
+//
+// DemoDebug Vars
+//
+
+// DemoDebugMode will close the file after every write
+SWBOOL DemoDebugMode = FALSE;
+//SWBOOL DemoDebugMode = TRUE;
+SWBOOL DemoInitOnce = FALSE;
+short DemoDebugBufferMax = 1;
+
+extern char LevelName[];
+extern char LevelSong[16];
+extern uint8_t FakeMultiNumPlayers;
+extern SWBOOL QuitFlag;
+
+///////////////////////////////////////////
+//
+// Demo File Manipulation
+//
+///////////////////////////////////////////
+
+char *DemoSyncFileName(void)
 {
-    if (menu)
-        Menu_Open(myconnectindex);
-    else
-        Menu_Close(myconnectindex);
+    static char file_name[32];
+    char *ptr;
 
-    g_player[myconnectindex].ps->gm &= ~MODE_GAME;
-    g_player[myconnectindex].ps->gm |= MODE_DEMO;
-}
+    strcpy(file_name, DemoFileName);
 
-void Demo_PrepareWarp(void)
-{
-    FX_StopAllSounds();
-    S_ClearSoundLocks();
-}
-
-static void Demo_SetAllClocks(int32_t clocktime)
-{
-    totalclock = ototalclock = lockclock = clocktime;    
-}
-
-static int32_t G_OpenDemoRead(int32_t g_whichDemo) // 0 = mine
-{
-    int32_t i;
-    savehead_t saveh;
-
-    char demofn[14];
-    const char *demofnptr;
-
-    if (g_whichDemo == 1 && g_firstDemoFile[0])
-    {
-        demofnptr = g_firstDemoFile;
-    }
+    if ((ptr = strchr(file_name, '.')) == 0)
+        strcat(file_name, ".dms");
     else
     {
-        Bsprintf(demofn, DEMOFN_FMT, g_whichDemo);
-        demofnptr = demofn;
+        *ptr = '\0';
+        strcat(file_name, ".dms");
     }
 
-    g_demo_recFilePtr = kopen4loadfrommod(demofnptr, g_loadFromGroupOnly);
-    if (g_demo_recFilePtr == buildvfs_kfd_invalid)
-        return 0;
-
-    Bassert(g_whichDemo >= 1);
-    i = sv_loadsnapshot(g_demo_recFilePtr, -g_whichDemo, &saveh);
-    if (i)
-    {
-        LOG_F(INFO, "Unable to play demo #%d (code: %d).", g_whichDemo, i);
-        kclose(g_demo_recFilePtr); g_demo_recFilePtr = buildvfs_kfd_invalid;
-        return 0;
-    }
-
-    demo_hasdiffs = saveh.recdiffsp;
-    g_demo_totalCnt = saveh.reccnt;
-    demo_synccompress = saveh.synccompress;
-
-    demo_hasseeds = demo_synccompress&2;
-    demo_synccompress &= 1;
-
-    i = g_demo_totalCnt/REALGAMETICSPERSEC;
-    LOG_F(INFO, "Demo #%d duration is %d min %d sec", g_whichDemo, i/60, i%60);
-
-    g_demo_cnt = 1;
-    ud.reccnt = 0;
-
-    ud.god = ud.cashman = ud.eog = ud.showallmap = 0;
-    ud.noclip = ud.scrollmode = ud.overhead_on = 0; //= ud.pause_on = 0;
-
-    Demo_SetAllClocks(0);
-
-    return 1;
+    return file_name;
 }
 
-#if KRANDDEBUG
-extern void krd_enable(int32_t which);
-extern int32_t krd_print(const char *filename);
+void
+DemoSetup(void)
+{
+    if (DemoRecording)
+    {
+        if (DemoSyncRecord)
+            DemoSyncFile = fopen(DemoSyncFileName(),"wb");
+
+        DemoWriteHeader();
+        memset(&DemoBuffer, -1, sizeof(DemoBuffer));
+    }
+
+    if (DemoPlaying)
+    {
+        if (DemoSyncRecord)
+            DemoSyncFile = fopen(DemoSyncFileName(),"wb");
+        if (DemoSyncTest)
+            DemoSyncFile = fopen(DemoSyncFileName(),"rb");
+
+        DemoReadHeader();
+        memset(&DemoBuffer, -1, sizeof(DemoBuffer));
+        DemoReadBuffer();
+    }
+}
+
+void
+DemoRecordSetup(void)
+{
+    if (DemoRecording)
+    {
+        if (DemoSyncRecord)
+            DemoSyncFile = fopen(DemoSyncFileName(),"wb");
+
+        DemoWriteHeader();
+        memset(&DemoBuffer, -1, sizeof(DemoBuffer));
+    }
+}
+
+void
+DemoPlaySetup(void)
+{
+    if (DemoPlaying)
+    {
+        if (DemoSyncRecord)
+            DemoSyncFile = fopen(DemoSyncFileName(),"wb");
+        if (DemoSyncTest)
+            DemoSyncFile = fopen(DemoSyncFileName(),"rb");
+
+        DemoReadHeader();
+        memset(&DemoBuffer, -1, sizeof(DemoBuffer));
+        DemoReadBuffer();
+    }
+}
+
+void
+DemoWriteHeader(void)
+{
+    DEMO_HEADER dh;
+    DEMO_START_POS dsp;
+    PLAYERp pp;
+
+    DemoFileOut = fopen(DemoFileName, "wb");
+
+    if (!DemoFileOut)
+        return;
+
+    strcpy(dh.map_name, LevelName);
+    strcpy(dh.LevelSong, LevelSong);
+    dh.Level = Level;
+
+    if (FakeMultiNumPlayers)
+        dh.numplayers = FakeMultiNumPlayers;
+    else
+        dh.numplayers = numplayers;
+
+    fwrite(&dh, sizeof(dh), 1, DemoFileOut);
+
+    for (pp = Player; pp < Player + dh.numplayers; pp++)
+    {
+        dsp.x = pp->posx;
+        dsp.y = pp->posy;
+        dsp.z = pp->posz;
+        fwrite(&dsp, sizeof(dsp), 1, DemoFileOut);
+        fwrite(&pp->Flags, sizeof(pp->Flags), 1, DemoFileOut);
+        int16_t ang = fix16_to_int(pp->q16ang);
+        fwrite(&ang, sizeof(ang), 1, DemoFileOut);
+    }
+
+    fwrite(&Skill, sizeof(Skill), 1, DemoFileOut);
+    fwrite(&gNet, sizeof(gNet), 1, DemoFileOut);
+
+    if (DemoDebugMode)
+    {
+        DemoDebugBufferMax = numplayers;
+        fclose(DemoFileOut);
+    }
+}
+
+void
+DemoReadHeader(void)
+{
+    DEMO_HEADER dh;
+    DEMO_START_POS dsp;
+    PLAYERp pp;
+
+#if DEMO_FILE_TYPE != DEMO_FILE_GROUP
+    if (DemoEdit)
+    {
+        DemoFileIn = fopen(DemoFileName, "rb+");
+    }
+    else
+#endif
+    {
+        //DemoFileIn = fopen(DemoFileName, "rb");
+        DemoFileIn = DOPEN_READ(DemoFileName);
+    }
+
+    if (DemoFileIn == DF_ERR)
+    {
+        TerminateGame();
+        printf("File %s is not a valid demo file.",DemoFileName);
+        exit(0);
+    }
+
+    DREAD(&dh, sizeof(dh), 1, DemoFileIn);
+
+    strcpy(DemoLevelName, dh.map_name);
+    strcpy(LevelSong, dh.LevelSong);
+    Level = dh.Level;
+    if (dh.numplayers > 1)
+    {
+        FakeMultiNumPlayers = dh.numplayers;
+    }
+    else
+        numplayers = dh.numplayers;
+
+    for (pp = Player; pp < Player + dh.numplayers; pp++)
+    {
+        DREAD(&dsp, sizeof(dsp), 1, DemoFileIn);
+        pp->posx = dsp.x;
+        pp->posy = dsp.y;
+        pp->posz = dsp.z;
+        COVERupdatesector(pp->posx, pp->posy, &pp->cursectnum);
+        //pp->cursectnum = 0;
+        //updatesectorz(pp->posx, pp->posy, pp->posz, &pp->cursectnum);
+        DREAD(&pp->Flags, sizeof(pp->Flags), 1, DemoFileIn);
+        int16_t ang;
+        DREAD(&ang, sizeof(ang), 1, DemoFileIn);
+        pp->q16ang = fix16_from_int(ang);
+    }
+
+    DREAD(&Skill, sizeof(Skill), 1, DemoFileIn);
+    DREAD(&gNet, sizeof(gNet), 1, DemoFileIn);
+}
+
+// TODO: Write all data at once
+static void
+DemoWritePackets(const SW_PACKET *buffer, int32_t count, FILE *f)
+{
+    OLD_SW_PACKET packet;
+    for (; count > 0; ++buffer, --count)
+    {
+        packet.vel = B_LITTLE16(buffer->vel);
+        packet.svel = B_LITTLE16(buffer->svel);
+        packet.angvel = fix16_to_int(buffer->q16angvel);
+        packet.aimvel = fix16_to_int(buffer->q16aimvel);
+        packet.bits = B_LITTLE32(buffer->bits);
+        fwrite(&packet, sizeof(packet), 1, f);
+    }
+}
+
+// TODO: Read all data at once
+static void
+DemoReadPackets(SW_PACKET *buffer, int32_t count, DFILE f)
+{
+    OLD_SW_PACKET packet;
+    for (; count > 0; ++buffer, --count)
+    {
+        DREAD(&packet, sizeof(packet), 1, f);
+        buffer->vel = B_LITTLE16(packet.vel);
+        buffer->svel = B_LITTLE16(packet.svel);
+        buffer->q16angvel = fix16_from_int(packet.angvel);
+        buffer->q16aimvel = fix16_from_int(packet.aimvel);
+        buffer->bits = B_LITTLE32(packet.bits);
+    }
+}
+
+void
+DemoDebugWrite(void)
+{
+    DemoFileOut = fopen(DemoFileName, "ab");
+
+    ASSERT(DemoFileOut);
+
+    DemoWritePackets(DemoBuffer, DemoDebugBufferMax, DemoFileOut);
+    memset(DemoBuffer, -1, sizeof(SW_PACKET) * DemoDebugBufferMax);
+
+    fclose(DemoFileOut);
+}
+
+void
+DemoWriteBuffer(void)
+{
+    DemoWritePackets(DemoBuffer, sizeof(DemoBuffer)/sizeof(*DemoBuffer), DemoFileOut);
+    memset(&DemoBuffer, -1, sizeof(DemoBuffer));
+}
+
+void
+DemoReadBuffer(void)
+{
+    memset(&DemoBuffer, -1, sizeof(DemoBuffer));
+    DemoReadPackets(DemoBuffer, sizeof(DemoBuffer)/sizeof(*DemoBuffer), DemoFileIn);
+}
+
+void
+DemoBackupBuffer(void)
+{
+#if DEMO_FILE_TYPE != DEMO_FILE_GROUP
+    FILE *NewDemoFile;
+    FILE *OldDemoFile = DemoFileIn;
+    int pos,i;
+    char copy_buffer;
+    char NewDemoFileName[16] = "!";
+
+    // seek backwards to beginning of last buffer
+    fseek(OldDemoFile, -sizeof(DemoBuffer)/sizeof(*DemoBuffer)*sizeof(OLD_SW_PACKET), SEEK_CUR);
+    pos = ftell(OldDemoFile);
+
+    // open a new edit file
+    strcat(NewDemoFileName, DemoFileName);
+    NewDemoFile = fopen(NewDemoFileName, "wb");
+
+    rewind(OldDemoFile);
+
+    // copy old demo to new demo
+    for (i = 0; i < pos; i++)
+    {
+        fread(&copy_buffer, sizeof(copy_buffer), 1, OldDemoFile);
+        fwrite(&copy_buffer,sizeof(copy_buffer), 1, NewDemoFile);
+    }
+
+    DemoFileOut = NewDemoFile;
+    fclose(OldDemoFile);
+#endif
+}
+
+void
+DemoTerm(void)
+{
+    if (DemoRecording)
+    {
+        // if already closed
+        if (DemoFileOut == NULL)
+            return;
+
+        if (DemoDebugMode)
+        {
+            DemoFileOut = fopen(DemoFileName, "ab");
+            ASSERT(DemoFileOut);
+        }
+        else
+        {
+            // paste on a -1 record to the current buffer
+            if (DemoRecCnt < DEMO_BUFFER_MAX)
+                memset(&DemoBuffer[DemoRecCnt], -1, sizeof(DemoBuffer[DemoRecCnt]));
+
+            DemoWriteBuffer();
+        }
+
+        // write at least 1 record at the end filled with -1
+        // just for good measure
+        memset(&DemoBuffer[0], -1, sizeof(DemoBuffer[0]));
+        DemoWritePackets(DemoBuffer, 1, DemoFileOut);
+
+        fclose(DemoFileOut);
+        DemoFileOut = NULL;
+    }
+
+    if (DemoPlaying)
+    {
+        if (DemoFileIn == DF_ERR)
+            return;
+
+        DCLOSE(DemoFileIn);
+        DemoFileIn = DF_ERR;
+    }
+
+    if (DemoSyncTest||DemoSyncRecord)
+    {
+        if (DemoSyncFile == NULL)
+            return;
+
+        fclose(DemoSyncFile);
+        DemoSyncFile = NULL;
+    }
+}
+
+///////////////////////////////////////////
+//
+// Demo Play Back
+//
+///////////////////////////////////////////
+
+
+void
+DemoPlayBack(void)
+{
+    int pnum, cnt;
+    static int buf_ndx;
+    PLAYERp pp;
+    ControlInfo info;
+
+    if (SW_SHAREWARE)
+    {
+        // code here needs to be similar to RunLevel startup code
+        PlaySong(LevelSong, -1, TRUE, TRUE);
+    }
+
+
+    // Initialize Game part of network code (When ready2send != 0)
+    InitNetVars();
+
+    // IMPORTANT - MUST be right before game loop
+    InitTimingVars();
+
+    // THIS STUFF DEPENDS ON MYCONNECTINDEX BEING SET RIGHT
+    pp = Player + myconnectindex;
+    SetRedrawScreen(pp);
+
+    if (!DemoInitOnce)
+        buf_ndx = 0;
+
+    // everything has been inited at least once for PLAYBACK
+    DemoInitOnce = TRUE;
+
+    cnt = 0;
+    ready2send = 0;
+    DemoDone = FALSE;
+
+    while (TRUE)
+    {
+        timerUpdateClock();
+
+        // makes code run at the same rate
+        while (totalclock > totalsynctics)
+        {
+            handleevents();
+            OSD_DispatchQueued();
+
+            TRAVERSE_CONNECT(pnum)
+            {
+                pp = Player + pnum;
+                pp->inputfifo[pp->movefifoend & (MOVEFIFOSIZ-1)] = DemoBuffer[buf_ndx];
+                pp->movefifoend++;
+                buf_ndx++;
+
+                if (pp->inputfifo[(pp->movefifoend - 1) & (MOVEFIFOSIZ-1)].bits == -1)
+                {
+                    DemoDone = TRUE;
+                    break;
+                }
+
+                if (buf_ndx > DEMO_BUFFER_MAX - 1)
+                {
+                    DemoReadBuffer();
+                    buf_ndx = 0;
+                }
+            }
+
+            if (DemoDone)
+                break;
+
+            cnt++;
+
+            CONTROL_GetInput(&info);
+
+            domovethings();
+
+            MNU_CheckForMenus();
+
+            // fast forward and slow mo
+            if (DemoEdit)
+            {
+                if (KEY_PRESSED(KEYSC_F))
+                {
+                    if (KEY_PRESSED(KEYSC_LSHIFT) || KEY_PRESSED(KEYSC_RSHIFT))
+                        totalclock += synctics;
+                    else
+                        totalclock += synctics-1;
+                }
+
+                if (KEY_PRESSED(KEYSC_S))
+                    totalclock += 1-synctics;
+            }
+            else
+            {
+#if DEBUG
+                if (KEY_PRESSED(KEYSC_ALT) && KEY_PRESSED(KEYSC_CTRL) && KEY_PRESSED(KEYSC_S))
+                {
+                    KEY_PRESSED(KEYSC_ALT) = KEY_PRESSED(KEYSC_CTRL) = KEY_PRESSED(KEYSC_S) = 0;
+                    int16_t ang = fix16_to_int(Player->pang);
+                    saveboard("demosave.map", &Player->pos, ang, &Player->cursectnum);
+                }
 #endif
 
-void G_OpenDemoWrite(void)
-{
-    char demofn[BMAX_PATH];
-    int32_t i, demonum=1;
+                if (BUTTON(gamefunc_See_Co_Op_View))
+                {
+                    CONTROL_ClearButton(gamefunc_See_Co_Op_View);
 
-    if (ud.recstat == 2)
-    {
-        kclose(g_demo_recFilePtr);
-        g_demo_recFilePtr = buildvfs_kfd_invalid;
-    }
+                    screenpeek = connectpoint2[screenpeek];
 
-    if ((g_player[myconnectindex].ps->gm&MODE_GAME) && g_player[myconnectindex].ps->dead_flag)
-    {
-        Bstrcpy(apStrings[QUOTE_RESERVED4], "CANNOT START DEMO RECORDING WHEN DEAD!");
-        P_DoQuote(QUOTE_RESERVED4, g_player[myconnectindex].ps);
-        ud.recstat = ud.m_recstat = 0;
-        return;
-    }
-    if (demorec_diffs_cvar && !demorec_force_cvar)
-        for (i=1; i<g_scriptSize-2; i++)
+                    if (screenpeek < 0)
+                        screenpeek = connecthead;
+                }
+
+#if DEBUG
+                if (KEY_PRESSED(KEYSC_RIGHT) || KEY_PRESSED(KEYSC_UP))
+                {
+                    if (KEY_PRESSED(KEYSC_LSHIFT) || KEY_PRESSED(KEYSC_RSHIFT))
+                        totalclock += synctics;
+                    else
+                        totalclock += synctics-1;
+                }
+
+                if (KEY_PRESSED(KEYSC_LEFT) || KEY_PRESSED(KEYSC_DOWN))
+                    totalclock += 1-synctics;
+#endif
+            }
+
+
+            if (DemoSyncRecord)
+                demosync_record();
+            if (DemoSyncTest)
+                demosync_test(cnt);
+        }
+
+        // Put this back in later when keyboard stuff is stable
+        if (DemoEdit)
         {
-            intptr_t w=apScript[i];
-            if (VM_DECODE_INST(w)==CON_RESIZEARRAY && VM_DECODE_LINE_NUMBER(w) && apScript[i+1]>=0 && apScript[i+1]<g_gameArrayCount)
+            //CONTROL_GetButtonInput();
+            CONTROL_GetInput(&info);
+
+            // if a key is pressed, start recording from the point the key
+            // was pressed
+            if (BUTTON(gamefunc_Move_Forward) ||
+                BUTTON(gamefunc_Move_Backward) ||
+                BUTTON(gamefunc_Turn_Left) ||
+                BUTTON(gamefunc_Turn_Right) ||
+                BUTTON(gamefunc_Fire) ||
+                BUTTON(gamefunc_Open) ||
+                BUTTON(gamefunc_Jump) ||
+                BUTTON(gamefunc_Crouch) ||
+                BUTTON(gamefunc_Look_Up) ||
+                BUTTON(gamefunc_Look_Down))
             {
-                LOG_F(ERROR, "The CON code possibly contains the CON_RESIZEARRAY command. "
-                             "Gamearrays that change their size during the game are unsupported by "
-                             "the demo recording system. If you are sure that your code doesn't "
-                             "contain the CON_RESIZEARRAY command, you can force recording with the "
-                             "`demorec_force' cvar. Alternatively, you can disable diff recording "
-                             "with the `demorec_diffs' cvar.");
-                Bstrcpy(apStrings[QUOTE_RESERVED4], "FAILED TO START DEMO RECORDING. SEE LOG FILE.");
-                P_DoQuote(QUOTE_RESERVED4, g_player[myconnectindex].ps);
-                ud.recstat = ud.m_recstat = 0;
+                DemoBackupBuffer();
+
+                DemoRecCnt = buf_ndx;
+                DemoPlaying = FALSE;
+                DemoRecording = TRUE;
                 return;
             }
         }
-    do
-    {
-        if (demonum == MAXDEMOS)
-            return;
 
-        if (G_ModDirSnprintf(demofn, sizeof(demofn), DEMOFN_FMT, demonum))
+        if (BUTTON(gamefunc_See_Co_Op_View))
         {
-            LOG_F(ERROR, "Couldn't start demo writing: INTERNAL ERROR: file name too long");
-            goto error_wopen_demo;
+            screenpeek += 1;
+            if (screenpeek > numplayers-1)
+                screenpeek = 0;
         }
 
-        demonum++;
-
-        g_demo_filePtr = buildvfs_fopen_read(demofn);
-        if (g_demo_filePtr == NULL)
+        // demo is over
+        if (DemoDone)
             break;
 
-        MAYBE_FCLOSE_AND_NULL(g_demo_filePtr);
-    }
-    while (1);
-
-    g_demo_filePtr = buildvfs_fopen_write(demofn);
-    if (g_demo_filePtr == NULL)
-        return;
-
-    i=sv_saveandmakesnapshot(g_demo_filePtr, nullptr, -1, demorec_diffs_cvar, demorec_diffcompress_cvar,
-                             demorec_synccompress_cvar|(demorec_seeds_cvar<<1));
-    if (i)
-    {
-        MAYBE_FCLOSE_AND_NULL(g_demo_filePtr);
-error_wopen_demo:
-        Bstrcpy(apStrings[QUOTE_RESERVED4], "FAILED STARTING DEMO RECORDING. SEE OSD FOR DETAILS.");
-        P_DoQuote(QUOTE_RESERVED4, g_player[myconnectindex].ps);
-        ud.recstat = ud.m_recstat = 0;
-        return;
-    }
-
-    demorec_seeds = demorec_seeds_cvar;
-    demorec_diffs = demorec_diffs_cvar;
-    demo_synccompress = demorec_synccompress_cvar;
-    demorec_difftics = demorec_difftics_cvar;
-
-    Bsprintf(apStrings[QUOTE_RESERVED4], "DEMO %d RECORDING STARTED", demonum-1);
-    P_DoQuote(QUOTE_RESERVED4, g_player[myconnectindex].ps);
-
-    ud.reccnt = 0;
-    ud.recstat = ud.m_recstat = 1;  //
-
-#if KRANDDEBUG
-    krd_enable(1);
-#endif
-    g_demo_cnt = 1;
-}
-
-// demo_profile: < 0: prepare
-static int32_t g_demo_playFirstFlag, g_demo_profile, g_demo_stopProfile;
-static int32_t g_demo_exitAfter;
-void Demo_PlayFirst(int32_t prof, int32_t exitafter)
-{
-    g_demo_playFirstFlag = 1;
-    g_demo_exitAfter = exitafter;
-    Bassert(prof >= 0);
-    g_demo_profile = -prof;  // prepare
-}
-
-void Demo_SetFirst(const char *demostr)
-{
-    char *tailptr;
-    int32_t i = Bstrtol(demostr, &tailptr, 10);
-
-    if (tailptr==demostr+Bstrlen(demostr) && (unsigned)i < MAXDEMOS)  // demo number passed
-        Bsprintf(g_firstDemoFile, DEMOFN_FMT, i);
-    else  // demo file name passed
-        maybe_append_ext(g_firstDemoFile, sizeof(g_firstDemoFile), demostr, ".edm");
-}
-
-
-static uint8_t g_demo_seedbuf[RECSYNCBUFSIZ];
-
-static void Demo_WriteSync()
-{
-    int16_t tmpreccnt;
-
-    buildvfs_fwrite("sYnC", 4, 1, g_demo_filePtr);
-    tmpreccnt = (int16_t)ud.reccnt;
-    buildvfs_fwrite(&tmpreccnt, sizeof(int16_t), 1, g_demo_filePtr);
-    if (demorec_seeds)
-        buildvfs_fwrite(g_demo_seedbuf, 1, ud.reccnt, g_demo_filePtr);
-
-    if (demo_synccompress)
-        dfwrite_LZ4(recsync, sizeof(input_t), ud.reccnt, g_demo_filePtr);
-    else //if (demo_synccompress==0)
-        buildvfs_fwrite(recsync, sizeof(input_t), ud.reccnt, g_demo_filePtr);
-
-    ud.reccnt = 0;
-}
-
-void G_DemoRecord(void)
-{
-    int16_t i;
-
-    g_demo_cnt++;
-
-    if (demorec_diffs && (g_demo_cnt%demorec_difftics == 1))
-    {
-        sv_writediff(g_demo_filePtr);
-        demorec_difftics = demorec_difftics_cvar;
-    }
-
-    if (demorec_seeds)
-        g_demo_seedbuf[ud.reccnt] = (uint8_t)(randomseed>>24);
-
-    for (TRAVERSE_CONNECT(i))
-    {
-        Bmemcpy(&recsync[ud.reccnt], &g_player[i].input, sizeof(input_t));
-        ud.reccnt++;
-    }
-
-    if (ud.reccnt > RECSYNCBUFSIZ-MAXPLAYERS || (demorec_diffs && (g_demo_cnt%demorec_difftics == 0)))
-        Demo_WriteSync();
-}
-
-void G_CloseDemoWrite(void)
-{
-    if (ud.recstat == 1)
-    {
-        if (ud.reccnt > 0)
-            Demo_WriteSync();
-
-        buildvfs_fwrite("EnD!", 4, 1, g_demo_filePtr);
-
-        // lastly, we need to write the number of written recsyncs to the demo file
-        if (buildvfs_fseek_abs(g_demo_filePtr, offsetof(savehead_t, reccnt)))
-            perror("G_CloseDemoWrite: final fseek");
-        else
-            buildvfs_fwrite(&g_demo_cnt, sizeof(g_demo_cnt), 1, g_demo_filePtr);
-
-        ud.recstat = ud.m_recstat = 0;
-        MAYBE_FCLOSE_AND_NULL(g_demo_filePtr);
-
-        sv_freemem();
-
-        Bstrcpy(apStrings[QUOTE_RESERVED4], "DEMO RECORDING STOPPED");
-        P_DoQuote(QUOTE_RESERVED4, g_player[myconnectindex].ps);
-    }
-#if KRANDDEBUG
-    krd_print("krandrec.log");
-#endif
-}
-
-static int32_t g_whichDemo = 1;
-
-static int32_t Demo_UpdateState(int32_t frominit)
-{
-    int32_t j = g_player[myconnectindex].ps->gm&MODE_MENU;
-    int32_t k = sv_updatestate(frominit);
-    //                            tmpdifftime = g_demo_cnt+12;
-    Demo_RestoreModes(j);
-
-    if (k)
-        LOG_F(ERROR, "sv_updatestate() returned %d.", k);
-    return k;
-}
-
-#define CORRUPT(code) do { corruptcode=code; goto corrupt; } while(0)
-
-static int32_t Demo_ReadSync(int32_t errcode)
-{
-    uint16_t si;
-    int32_t i;
-
-    if (kread(g_demo_recFilePtr, &si, sizeof(uint16_t)) != sizeof(uint16_t))
-        return errcode;
-
-    i = si;
-    if (demo_hasseeds)
-    {
-        if (kread(g_demo_recFilePtr, g_demo_seedbuf, i) != i)
-            return errcode;
-    }
-
-    if (demo_synccompress)
-    {
-        if (kdfread_LZ4(recsync, sizeof(input_t), i, g_demo_recFilePtr) != i)
-            return errcode+1;
-    }
-    else
-    {
-        int32_t bytes = sizeof(input_t)*i;
-
-        if (kread(g_demo_recFilePtr, recsync, bytes) != bytes)
-            return errcode+2;
-    }
-
-    ud.reccnt = i;
-    return 0;
-}
-
-////////// DEMO PROFILING (TIMEDEMO MODE) //////////
-static struct {
-    int32_t numtics, numframes;
-    double totalgamems;
-    double totalroomsdrawms, totalrestdrawms;
-    double starthiticks;
-} g_prof;
-
-int32_t Demo_IsProfiling(void)
-{
-    return (g_demo_profile > 0);
-}
-
-static void Demo_StopProfiling(void)
-{
-    g_demo_stopProfile = 1;
-}
-
-static void Demo_GToc(double t)
-{
-    g_prof.numtics++;
-    g_prof.totalgamems += timerGetFractionalTicks()-t;
-}
-
-static void Demo_RToc(double t1, double t2)
-{
-    g_prof.numframes++;
-    g_prof.totalroomsdrawms += t2-t1;
-    g_prof.totalrestdrawms += timerGetFractionalTicks()-t2;
-}
-
-static void Demo_DisplayProfStatus(void)
-{
-    char buf[64];
-
-    static int32_t lastpercent=-1;
-    int32_t percent = (100*g_demo_cnt)/g_demo_totalCnt;
-
-    if (lastpercent == percent)
-        return;
-    lastpercent = percent;
-
-    videoClearScreen(0);
-    Bsnprintf(buf, sizeof(buf), "timing... %d/%d game tics (%d %%)",
-              g_demo_cnt, g_demo_totalCnt, percent);
-    gametext_center(60, buf);
-    videoNextPage();
-}
-
-static void Demo_SetupProfile(void)
-{
-    g_demo_profile *= -1;  // now >0: profile for real
-
-    g_demo_soundToggle = ud.config.SoundToggle;
-    ud.config.SoundToggle = 0;  // restored by Demo_FinishProfile()
-
-    Bmemset(&g_prof, 0, sizeof(g_prof));
-
-    g_prof.starthiticks = timerGetFractionalTicks();
-}
-
-static void Demo_FinishProfile(void)
-{
-    if (Demo_IsProfiling())
-    {
-        int32_t dn=g_whichDemo-1;
-        int32_t nt=g_prof.numtics, nf=g_prof.numframes;
-        double gms=g_prof.totalgamems;
-        double dms1=g_prof.totalroomsdrawms, dms2=g_prof.totalrestdrawms;
-
-        ud.config.SoundToggle = g_demo_soundToggle;
-
-        if (nt > 0)
+        if (QuitFlag)
         {
-            LOG_F(INFO, "== demo %d: %d gametics", dn, nt);
-            LOG_F(INFO, "== demo %d game times: %.03f ms (%.03f us/gametic)",
-                       dn, gms, (gms*1000.0)/nt);
+            DemoMode = FALSE;
+            break;
         }
 
-        if (nf > 0)
+        if (ExitLevel)
         {
-            LOG_F(INFO, "== demo %d: %d frames (%d frames/gametic)", dn, nf, g_demo_profile-1);
-            LOG_F(INFO, "== demo %d drawrooms times: %.03f s (%.03f ms/frame)",
-                       dn, dms1/1000.0, dms1/nf);
-            LOG_F(INFO, "== demo %d drawrest times: %.03f s (%.03f ms/frame)",
-                       dn, dms2/1000.0, dms2/nf);
+            // Quiting Demo
+            ExitLevel = FALSE;
+            if (DemoMode)
+            {
+                DemoPlaying = FALSE;
+                DemoMode = FALSE;
+            }
+            break;
         }
 
-        {
-            double totalprofms = gms+dms1+dms2;
-            double totalms = timerGetFractionalTicks()-g_prof.starthiticks;
-            if (totalprofms != 0)
-                LOG_F(INFO, "== demo %d: non-profiled time overhead: %.02f %%",
-                           dn, 100.0*totalms/totalprofms - 100.0);
-        }
+        drawscreen(Player + screenpeek);
     }
 
-    g_demo_profile = 0;
-    g_demo_stopProfile = 0;
-}
-////////////////////
-
-int32_t G_PlaybackDemo(void)
-{
-    int32_t bigi, j, initsyncofs = 0, lastsyncofs = 0, lastsynctic = 0, lastsyncclock = 0;
-    int32_t foundemo = 0, corruptcode, outofsync=0;
-    static int32_t in_menu = 0;
-    //    static int32_t tmpdifftime=0;
-
-    Demo_SetAllClocks(0);
-
-    if (ready2send)
-        return 0;
-
-    if (!g_demo_playFirstFlag)
-        g_demo_profile = 0;
-
-RECHECK:
-    if (g_demo_playFirstFlag)
-        g_demo_playFirstFlag = 0;
-    else if (g_demo_exitAfter)
-        G_GameExit();
-
-#if KRANDDEBUG
-    if (foundemo)
-        krd_print("krandplay.log");
-#endif
-
-    in_menu = g_player[myconnectindex].ps->gm&MODE_MENU;
-
-    pub = NUMPAGES;
-    pus = NUMPAGES;
-
-    renderFlushPerms();
-
-    if (!g_netServer && ud.multimode < 2)
-        foundemo = G_OpenDemoRead(g_whichDemo);
-
-    if (foundemo == 0)
+    // only exit if conditions are write
+    if (DemoDone && !DemoMode && !NewGame)
     {
-        ud.recstat = 0;
-        g_player[myconnectindex].ps->gm &= ~MODE_DEMO;
-
-        if (g_whichDemo > 1)
-        {
-            g_whichDemo = 1;
-            goto RECHECK;
-        }
-
-        fadepal(0,0,0, 0,252,28);
-        P_SetGamePalette(g_player[myconnectindex].ps, BASEPAL, 1);    // JBF 20040308
-        G_DrawBackground();
-        M_DisplayMenus();
-        videoNextPage();
-        fadepal(0,0,0, 252,0,-28);
-        ud.reccnt = 0;
-    }
-    else
-    {
-        ud.recstat = 2;
-
-        g_whichDemo++;
-        if (g_whichDemo == MAXDEMOS)
-            g_whichDemo = 1;
-
-        g_player[myconnectindex].ps->gm &= ~MODE_GAME;
-        g_player[myconnectindex].ps->gm |= MODE_DEMO;
-
-        lastsyncofs = ktell(g_demo_recFilePtr);
-        initsyncofs = lastsyncofs;
-        lastsynctic = g_demo_cnt;
-        lastsyncclock = (int32_t) totalclock;
-        outofsync = 0;
-#if KRANDDEBUG
-        krd_enable(2);
-#endif
-        if (g_demo_profile < 0)
-        {
-            Demo_SetupProfile();
-        }
+        TerminateLevel();
+        TerminateGame();
+        exit(0);
     }
 
-    if (foundemo == 0 || in_menu || I_CheckAllInput() || numplayers > 1)
-    {
-        FX_StopAllSounds();
-        S_ClearSoundLocks();
-        Menu_Open(myconnectindex);
-    }
-
-    ready2send = 0;
-    bigi = 0;
-
-    I_ClearAllInput();
-
-    if (foundemo)
-    {
-        int const mapidx = (ud.volume_number * MAXLEVELS) + ud.level_number;
-        Bassert((unsigned)mapidx < ARRAY_SIZE(g_mapInfo));
-        auto &m = g_mapInfo[mapidx];
-
-        if (G_HaveUserMap())
-            OSD_Printf(OSDTEXT_YELLOW "User Map: %s\n", boardfilename);
-        else if (FURY)
-            OSD_Printf(OSDTEXT_YELLOW "Entering: %s\n", m.name);
-        else
-            OSD_Printf(OSDTEXT_YELLOW "E%dL%d: %s\n", ud.volume_number + 1, ud.level_number + 1, m.name);
-    }
-
-    //    OSD_Printf("ticcnt=%d, total=%d\n", g_demo_cnt, g_demo_totalCnt);
-    while (g_demo_cnt < g_demo_totalCnt || foundemo==0)
-    {
-        // Main loop here. It also runs when there's no demo to show,
-        // so maybe a better name for this function would be
-        // G_MainLoopWhenNotInGame()?
-
-        // Demo requested from the OSD, its name is in g_firstDemoFile[]
-        if (g_demo_playFirstFlag)
-        {
-            g_demo_playFirstFlag = 0;
-            g_whichDemo = 1;  // force g_firstDemoFile[]
-            g_demo_paused = 0;
-            goto nextdemo_nomenu;
-        }
-
-        if (foundemo && (!g_demo_paused || g_demo_goalCnt))
-        {
-            if (g_demo_goalCnt>0 && g_demo_goalCnt < g_demo_cnt)
-            {
-                // initialize rewind
-
-                int32_t menu = g_player[myconnectindex].ps->gm&MODE_MENU;
-
-                if (g_demo_goalCnt > lastsynctic)
-                {
-                    // we can use a previous diff
-                    if (Demo_UpdateState(0)==0)
-                    {
-                        g_demo_cnt = lastsynctic;
-                        klseek(g_demo_recFilePtr, lastsyncofs, SEEK_SET);
-                        ud.reccnt = 0;
-
-                        Demo_SetAllClocks(lastsyncclock);
-                    }
-                    else CORRUPT(-1);
-                }
-                else
-                {
-                    // update to initial state
-                    if (Demo_UpdateState(1) == 0)
-                    {
-                        klseek(g_demo_recFilePtr, initsyncofs, SEEK_SET);
-                        g_levelTextTime = 0;
-
-                        g_demo_cnt = 1;
-                        ud.reccnt = 0;
-
-                        //                        ud.god = ud.cashman = ud.eog = ud.showallmap = 0;
-                        //                        ud.noclip = ud.scrollmode = ud.overhead_on = ud.pause_on = 0;
-
-                        Demo_SetAllClocks(0);
-                    }
-                    else CORRUPT(0);
-                }
-
-                Demo_RestoreModes(menu);
-            }
-
-            if (g_demo_stopProfile)
-                Demo_FinishProfile();
-
-            while (totalclock >= (lockclock+TICSPERFRAME)
-                //                   || (ud.reccnt > REALGAMETICSPERSEC*2 && ud.pause_on)
-                || (g_demo_goalCnt>0 && g_demo_cnt<g_demo_goalCnt))
-            {
-                if (ud.reccnt<=0)
-                {
-                    // Record count reached zero (or <0, corrupted), need
-                    // reading another chunk.
-
-                    char tmpbuf[4];
-
-                    if (ud.reccnt<0)
-                    {
-                        LOG_F(ERROR, "G_PlaybackDemo: ud.reccnt<0!");
-                        CORRUPT(1);
-                    }
-
-                    bigi = 0;
-                    //reread:
-                    if (kread(g_demo_recFilePtr, tmpbuf, 4) != 4)
-                        CORRUPT(2);
-
-                    if (Bmemcmp(tmpbuf, "sYnC", 4)==0)
-                    {
-                        int32_t err = Demo_ReadSync(3);
-                        if (err)
-                            CORRUPT(err);
-                    }
-
-                    else if (demo_hasdiffs && Bmemcmp(tmpbuf, "dIfF", 4)==0)
-                    {
-                        int32_t k = sv_readdiff(g_demo_recFilePtr);
-
-                        if (k)
-                        {
-                            LOG_F(ERROR, "sv_readdiff() returned %d.", k);
-                            CORRUPT(6);
-                        }
-                        else
-                        {
-                            lastsyncofs = ktell(g_demo_recFilePtr);
-                            lastsynctic = g_demo_cnt;
-                            lastsyncclock = (int32_t) totalclock;
-
-                            if (kread(g_demo_recFilePtr, tmpbuf, 4) != 4)
-                                CORRUPT(7);
-                            if (Bmemcmp(tmpbuf, "sYnC", 4))
-                                CORRUPT(8);
-
-                            {
-                                int32_t err = Demo_ReadSync(9);
-                                if (err)
-                                    CORRUPT(err);
-                            }
-
-                            if ((g_demo_goalCnt==0 && demoplay_diffs) ||
-                                (g_demo_goalCnt>0 && ud.reccnt/ud.multimode >= g_demo_goalCnt-g_demo_cnt))
-                            {
-                                Demo_UpdateState(0);
-                            }
-                        }
-                    }
-                    else if (Bmemcmp(tmpbuf, "EnD!", 4)==0)
-                        goto nextdemo;
-                    else CORRUPT(12);
-
-                    if (0)
-                    {
-corrupt:
-                        LOG_F(ERROR, "Demo #%d is corrupt (code %d).", g_whichDemo-1, corruptcode);
-nextdemo:
-                        Menu_Open(myconnectindex);
-nextdemo_nomenu:
-                        foundemo = 0;
-                        ud.reccnt = 0;
-                        kclose(g_demo_recFilePtr); g_demo_recFilePtr = buildvfs_kfd_invalid;
-
-                        if (g_demo_goalCnt>0)
-                            g_demo_goalCnt=0;
-
-                        if (Demo_IsProfiling())  // don't reset g_demo_profile if it's < 0
-                            Demo_FinishProfile();
-                        goto RECHECK;
-                    }
-                }
-
-                if (demo_hasseeds)
-                    outofsync = ((uint8_t)(randomseed>>24) != g_demo_seedbuf[bigi]);
-
-                for (TRAVERSE_CONNECT(j))
-                {
-                    Bmemcpy(&inputfifo[0][j], &recsync[bigi], sizeof(input_t));
-                    bigi++;
-                    ud.reccnt--;
-                }
-
-                g_demo_cnt++;
-
-                if (Demo_IsProfiling())
-                {
-                    double t = timerGetFractionalTicks();
-                    G_DoMoveThings();
-                    Demo_GToc(t);
-                }
-                else if (!g_demo_paused)
-                {
-                    // assumption that ud.multimode doesn't change in a demo may not be true
-                    // sometime in the future                    v v v v v v v v v
-                    if (g_demo_goalCnt==0 || !demo_hasdiffs || ud.reccnt/ud.multimode>=g_demo_goalCnt-g_demo_cnt)
-                    {
-                        G_DoMoveThings();  // increases lockclock by TICSPERFRAME
-                    }
-                    else
-                    {
-                        lockclock += TICSPERFRAME;
-                    }
-                }
-                else
-                {
-                    int32_t k = ud.config.SoundToggle;
-                    ud.config.SoundToggle = 0;
-                    G_DoMoveThings();
-                    ud.config.SoundToggle = k;
-                }
-
-                ototalclock += TICSPERFRAME;
-
-                if (g_demo_goalCnt > 0)
-                {
-                    // if fast-forwarding, we must update totalclock
-                    totalclock += TICSPERFRAME;
-
-//                    OSD_Printf("t:%d, l+T:%d; cnt:%d, goal:%d%s", totalclock, (lockclock+TICSPERFRAME),
-//                               g_demo_cnt, g_demo_goalCnt, g_demo_cnt>=g_demo_goalCnt?" ":"\n");
-                    if (g_demo_cnt>=g_demo_goalCnt)
-                        g_demo_goalCnt = 0;
-                }
-            }
-        }
-        else if (foundemo && g_demo_paused)
-            totalclock = lockclock;
-
-        if (Demo_IsProfiling())
-            totalclock += TICSPERFRAME;
-
-        if (engineFPSLimit((g_player[myconnectindex].ps->gm & MODE_MENU) == MODE_MENU))
-        {
-            G_HandleLocalKeys();
-
-            if (foundemo == 0)
-            {
-                G_DrawBackground();
-            }
-            else
-            {
-                // NOTE: currently, no key/mouse events will be seen while
-                // demo-profiling because we need 'totalclock' for ourselves.
-                // And handleevents() -> sampletimer() would mess that up.
-
-                // Render one frame (potentially many if profiling)
-                if (Demo_IsProfiling())
-                {
-                    int32_t i, num = g_demo_profile-1;
-
-                    Bassert(totalclock-ototalclock==4);
-
-                    for (i=0; i<num; i++)
-                    {
-                        double t1 = timerGetFractionalTicks(), t2;
-
-                        //                    initprintf("t=%d, o=%d, t-o = %d\n", totalclock,
-                        //                               ototalclock, totalclock-ototalclock);
-
-                                            // NOTE: G_DrawRooms() calculates smoothratio inside and
-                                            // ignores the function argument, so we set totalclock
-                                            // accordingly.
-                        j = (i<<16)/num;
-                        totalclock = ototalclock + (j>>16);
-
-                        G_DrawRooms(screenpeek, j);
-
-                        t2 = timerGetFractionalTicks();
-
-                        G_DisplayRest(j);
-
-                        Demo_RToc(t1, t2);
-                    }
-
-                    totalclock = ototalclock+4;
-
-                    // draw status
-                    Demo_DisplayProfStatus();
-
-                    if (handleevents_peekkeys())
-                        Demo_StopProfiling();
-                }
-                else
-                {
-                    j = calc_smoothratio(g_demo_paused ? lockclock : totalclock, ototalclock, REALGAMETICSPERSEC);
-                    G_DrawRooms(screenpeek, j);
-                    G_DisplayRest(j);
-
-                }
-//                    totalclocklock = totalclock;
-
-                if (!Demo_IsProfiling() && (g_player[myconnectindex].ps->gm&MODE_MENU) == 0)
-                {
-                    if (demoplay_showsync && outofsync)
-                        gametext_center(100, "OUT OF SYNC");
-
-                    if (g_demo_showStats)
-                    {
-    #if 0
-                        if (g_demo_cnt<tmpdifftime)
-                            gametext_center(100, "DIFF");
-
-                        {
-                            char buf[32];
-                            Bsprintf(buf, "RC:%4d  TC:%5d", ud.reccnt, g_demo_cnt);
-                            gametext_center_number(100, buf);
-                        }
-    #endif
-                        j=g_demo_cnt/REALGAMETICSPERSEC;
-                        Bsprintf(buf, "%02d:%02d", j/60, j%60);
-                        gametext_widenumber(18, 16, buf);
-
-                        rotatesprite(60<<16, 16<<16, 32768, 0, SLIDEBAR, 0, 0, 2+8+16+1024, 0, 0, (xdim*95)/320, ydim-1);
-                        rotatesprite(90<<16, 16<<16, 32768, 0, SLIDEBAR, 0, 0, 2+8+16+1024, (xdim*95)/320, 0, (xdim*125)/320, ydim-1);
-                        rotatesprite(120<<16, 16<<16, 32768, 0, SLIDEBAR, 0, 0, 2+8+16+1024, (xdim*125)/320, 0, (xdim*155)/320, ydim-1);
-                        rotatesprite(150<<16, 16<<16, 32768, 0, SLIDEBAR, 0, 0, 2+8+16+1024, (xdim*155)/320, 0, xdim-1, ydim-1);
-
-                        j = (182<<16) - (tabledivide32_noinline((120*(g_demo_totalCnt-g_demo_cnt))<<4, g_demo_totalCnt)<<12);
-                        rotatesprite_fs(j, (16<<16)+(1<<15), 32768, 0, SLIDEBAR+1, 0, 0, 2+8+16+1024);
-
-                        j=(g_demo_totalCnt-g_demo_cnt)/REALGAMETICSPERSEC;
-                        Bsprintf(buf, "-%02d:%02d%s", j/60, j%60, g_demo_paused ? "   ^15PAUSED" : "");
-                        gametext_widenumber(194, 16, buf);
-                    }
-                }
-
-                if ((g_netServer || ud.multimode > 1) && g_player[myconnectindex].ps->gm)
-                    Net_GetPackets();
-
-                if (g_player[myconnectindex].gotvote == 0 && voting != -1 && voting != myconnectindex)
-                    gametext_center(60, "Press F1 to Accept, F2 to Decline");
-            }
-
-            if ((g_player[myconnectindex].ps->gm&MODE_MENU) && (g_player[myconnectindex].ps->gm&MODE_EOL))
-            {
-                Demo_FinishProfile();
-                videoNextPage();
-                goto RECHECK;
-            }
-
-            if ((I_EscapeTrigger()||(MOUSE_GetButtons()&M_RIGHTBUTTON)) && (g_player[myconnectindex].ps->gm&MODE_MENU) == 0 && (g_player[myconnectindex].ps->gm&MODE_TYPE) == 0)
-            {
-                I_EscapeTriggerClear();
-                FX_StopAllSounds();
-                S_ClearSoundLocks();
-                Menu_Open(myconnectindex);
-                Menu_Change(MENU_MAIN);
-                S_MenuSound();
-            }
-
-            if (Demo_IsProfiling())
-            {
-                // Do nothing: sampletimer() is reached from M_DisplayMenus() ->
-                // Net_GetPackets() else.
-            }
-            else if (g_player[myconnectindex].ps->gm&MODE_TYPE)
-            {
-                Net_SendMessage();
-
-                if ((g_player[myconnectindex].ps->gm&MODE_TYPE) != MODE_TYPE)
-                {
-                    g_player[myconnectindex].ps->gm = 0;
-                    Menu_Open(myconnectindex);
-                }
-            }
-            else
-            {
-                if (ud.recstat != 2)
-                    M_DisplayMenus();
-
-                if ((g_netServer || ud.multimode > 1)  && !Menu_IsTextInput(m_currentMenu))
-                {
-                    ControlInfo noshareinfo;
-                    CONTROL_GetInput(&noshareinfo);
-                    if (BUTTON(gamefunc_SendMessage))
-                    {
-                        KB_FlushKeyboardQueue();
-                        CONTROL_ClearButton(gamefunc_SendMessage);
-                        g_player[myconnectindex].ps->gm = MODE_TYPE;
-                        typebuf[0] = 0;
-                    }
-                }
-            }
-
-            if (!Demo_IsProfiling())
-                G_PrintGameQuotes(screenpeek);
-
-            if (ud.last_camsprite != ud.camerasprite)
-                ud.last_camsprite = ud.camerasprite;
-
-            if (VOLUMEONE)
-            {
-                if (ud.show_help == 0 && (g_player[myconnectindex].ps->gm&MODE_MENU) == 0)
-                    rotatesprite_fs((320-50)<<16, 9<<16, 65536L, 0, BETAVERSION, 0, 0, 2+8+16+128);
-            }
-
-            videoNextPage();
-        }
-
-        // NOTE: We must prevent handleevents() and Net_GetPackets() from
-        // updating totalclock when profiling (both via sampletimer()):
-        if (!Demo_IsProfiling())
-            gameHandleEvents();
-
-        if (g_player[myconnectindex].ps->gm == MODE_GAME)
-        {
-            // user wants to play a game, quit showing demo!
-
-            if (foundemo)
-            {
-#if KRANDDEBUG
-                krd_print("krandplay.log");
-#endif
-                kclose(g_demo_recFilePtr); g_demo_recFilePtr = buildvfs_kfd_invalid;
-            }
-
-            return 0;
-        }
-    }
-
-    ud.multimode = numplayers;  // fixes 2 infinite loops after watching demo
-    kclose(g_demo_recFilePtr); g_demo_recFilePtr = buildvfs_kfd_invalid;
-
-    Demo_FinishProfile();
-
-    // if we're in the menu, try next demo immediately
-    if (g_player[myconnectindex].ps->gm&MODE_MENU)
-        goto RECHECK;
-
-#if KRANDDEBUG
-    if (foundemo)
-        krd_print("krandplay.log");
-#endif
-
-    // finished playing a demo and not in menu:
-    // return so that e.g. the title can be shown
-    return 1;
 }

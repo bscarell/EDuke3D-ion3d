@@ -1,12 +1,13 @@
 //-------------------------------------------------------------------------
 /*
-Copyright (C) 2010 EDuke32 developers and contributors
+Copyright (C) 1997, 2005 - 3D Realms Entertainment
 
-This file is part of EDuke32.
+This file is part of Shadow Warrior version 1.2
 
-EDuke32 is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License version 2
-as published by the Free Software Foundation.
+Shadow Warrior is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,52 +18,57 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+Original Source: 1997 - Frank Maddin and Jim Norwood
+Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
 
-#ifndef demo_h_
-#define demo_h_
+extern FILE *DemoFile;
+extern SWBOOL DemoPlaying;
+extern SWBOOL DemoRecording;
+extern SWBOOL DemoEdit;
+extern SWBOOL DemoMode;
+extern char DemoFileName[16];
+extern char DemoLevelName[16];
 
-#include "compat.h"
-#include "vfs.h"
-#include "cache1d.h"
+extern FILE *DemoSyncFile;
+extern SWBOOL DemoSyncTest;
+extern SWBOOL DemoSyncRecord;
+extern char DemoTmpName[16];
 
-#define DEMOFN_FMT "edemo%03d.edm"
-#define MAXDEMOS 1000
+extern SWBOOL DemoDebugMode;
+extern SWBOOL DemoInitOnce;
+extern short DemoDebugBufferMax;
 
-extern buildvfs_FILE g_demo_filePtr;
-extern char g_firstDemoFile[BMAX_PATH];
+#define DEMO_BUFFER_MAX 2048
+extern SW_PACKET DemoBuffer[DEMO_BUFFER_MAX];
+extern int DemoRecCnt;                    // Can only record 1-player game
 
-extern int32_t demoplay_diffs;
-extern int32_t demoplay_showsync;
-extern int32_t demorec_diffcompress_cvar;
-extern int32_t demorec_diffs_cvar;
-extern int32_t demorec_difftics_cvar;
-extern int32_t demorec_force_cvar;
-extern int32_t demorec_seeds_cvar;
-extern int32_t demorec_synccompress_cvar;
-extern int32_t g_demo_cnt;
-extern int32_t g_demo_goalCnt;
-extern int32_t g_demo_paused;
-extern buildvfs_kfd g_demo_recFilePtr;
-extern int32_t g_demo_rewind;
-extern int32_t g_demo_showStats;
-extern int32_t g_demo_totalCnt;
+#define DEMO_FILE_GROUP 0
+#define DEMO_FILE_STD   1
+#define DEMO_FILE_TYPE DEMO_FILE_GROUP
 
-int32_t G_PlaybackDemo(void);
-void Demo_PrepareWarp(void);
-void G_CloseDemoWrite(void);
-void G_DemoRecord(void);
-void G_OpenDemoWrite(void);
-
-void Demo_PlayFirst(int32_t prof, int32_t exitafter);
-void Demo_SetFirst(const char *demostr);
-
-int32_t Demo_IsProfiling(void);
-
-#if KRANDDEBUG
-int32_t krd_print(const char *filename);
-void krd_enable(int32_t which);
+// Demo File - reading from group
+#if DEMO_FILE_TYPE == DEMO_FILE_GROUP
+typedef long DFILE;
+#define DREAD(ptr, size, num, handle) kread((handle),(ptr),(size)*(num))
+#define DOPEN_READ(name) kopen4load(name,0)
+#define DCLOSE(handle) kclose(handle)
+#define DF_ERR -1
+#else
+typedef FILE *DFILE;
+#define DREAD(ptr, size, num,handle) fread((ptr),(size),(num),(handle))
+#define DWRITE(ptr, size, num,handle) fwrite((ptr),(size),(num),(handle))
+#define DOPEN_WRITE(name) fopen(name,"wb")
+#define DOPEN_READ(name) fopen(name,"rb")
+#define DCLOSE(handle) fclose(handle)
+#define DF_ERR NULL
 #endif
 
-#endif
+void DemoTerm(void);
+void DemoPlaySetup(void);
+void DemoPlayBack(void);
+void DemoRecordSetup(void);
+void DemoDebugWrite(void);
+void DemoWriteBuffer(void);

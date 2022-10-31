@@ -1,12 +1,13 @@
 //-------------------------------------------------------------------------
 /*
-Copyright (C) 2010 EDuke32 developers and contributors
+Copyright (C) 1997, 2005 - 3D Realms Entertainment
 
-This file is part of EDuke32.
+This file is part of Shadow Warrior version 1.2
 
-EDuke32 is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License version 2
-as published by the Free Software Foundation.
+Shadow Warrior is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,6 +18,9 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+Original Source: 1997 - Frank Maddin and Jim Norwood
+Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
 
@@ -27,452 +31,230 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 // default button assignments and game function names
 // axis defaults are also included
 
-#include "_control.h"
-#include "control.h"
 
-#ifndef function_private_h_
-#define function_private_h_
-#ifdef __cplusplus
-extern "C" {
-#endif
-char gamefunctions[NUMGAMEFUNCTIONS][MAXGAMEFUNCLEN] =
-   {
-   "Move_Forward",
-   "Move_Backward",
-   "Turn_Left",
-   "Turn_Right",
-   "Strafe",
-   "Fire",
-   "Open",
-   "Run",
-   "Alt_Fire",
-   "Jump",
-   "Crouch",
-   "Look_Up",
-   "Look_Down",
-   "Look_Left",
-   "Look_Right",
-   "Strafe_Left",
-   "Strafe_Right",
-   "Aim_Up",
-   "Aim_Down",
-   "Weapon_1",
-   "Weapon_2",
-   "Weapon_3",
-   "Weapon_4",
-   "Weapon_5",
-   "Weapon_6",
-   "Weapon_7",
-   "Weapon_8",
-   "Weapon_9",
-   "Weapon_10",
-   "Inventory",
-   "Inventory_Left",
-   "Inventory_Right",
-#ifndef EDUKE32_STANDALONE
-   "Holo_Duke",
-   "Jetpack",
-   "NightVision",
-   "MedKit",
-#else
-   "",
-   "",
-   "",
-   "",
-#endif
-   "TurnAround",
-   "SendMessage",
-   "Map",
-   "Shrink_Screen",
-   "Enlarge_Screen",
-   "Center_View",
-   "Holster_Weapon",
-   "Show_Opponents_Weapon",
-   "Map_Follow_Mode",
-   "See_Coop_View",
-   "Mouse_Aiming",
-   "Toggle_Crosshair",
-#ifndef EDUKE32_STANDALONE
-   "Steroids",
-   "Quick_Kick",
-#else
-   "",
-   "",
-#endif
-   "Next_Weapon",
-   "Previous_Weapon",
-   "Show_Console",
-   "Show_Scoreboard",
-   "Dpad_Select",
-   "Dpad_Aiming",
-   "AutoRun",
-   "Last_Used_Weapon",
-   "Quick_Save",
-   "Quick_Load",
-   "Alt_Weapon",
-   "Third_Person_View",
-   "Toggle_Crouch",
-   };
+#ifndef function_private_
+#define function_private_
+const char *gamefunctions[] =
+{
+    "Move_Forward",
+    "Move_Backward",
+    "Turn_Left",
+    "Turn_Right",
+    "Strafe",
+    "Fire",
+    "Open",
+    "Run",
+    "AutoRun",
+    "Jump",
+    "Crouch",
+    "Look_Up",
+    "Look_Down",
+    "Strafe_Left",
+    "Strafe_Right",
+    "Aim_Up",
+    "Aim_Down",
+    "Weapon_1",
+    "Weapon_2",
+    "Weapon_3",
+    "Weapon_4",
+    "Weapon_5",
+    "Weapon_6",
+    "Weapon_7",
+    "Weapon_8",
+    "Weapon_9",
+    "Weapon_10",
+    "Inventory",
+    "Inventory_Left",
+    "Inventory_Right",
+    "Med_Kit",
+    "Smoke_Bomb",
+    "Night_Vision",
+    "Gas_Bomb",
+    "Flash_Bomb",
+    "Caltrops",
+    "TurnAround",
+    "SendMessage",
+    "Map",
+    "Shrink_Screen",
+    "Enlarge_Screen",
+    "Center_View",
+    "Holster_Weapon",
+    "Map_Follow_Mode",
+    "See_Co_Op_View",
+    "Mouse_Aiming",
+    "Toggle_Crosshair",
+    "Next_Weapon",
+    "Previous_Weapon",
+    "Show_Menu",
+    "Show_Console",
+    "Alt_Weapon_Mode",
+};
 
-// note: internal ordering is important, must not be changed
-const char gamefunc_symbol_names[NUMGAMEFUNCTIONS][MAXGAMEFUNCLEN] =
-   {
-   "gamefunc_Move_Forward",
-   "gamefunc_Move_Backward",
-   "gamefunc_Turn_Left",
-   "gamefunc_Turn_Right",
-   "gamefunc_Strafe",
-   "gamefunc_Fire",
-   "gamefunc_Open",
-   "gamefunc_Run",
-   "gamefunc_Alt_Fire",
-   "gamefunc_Jump",
-   "gamefunc_Crouch",
-   "gamefunc_Look_Up",
-   "gamefunc_Look_Down",
-   "gamefunc_Look_Left",
-   "gamefunc_Look_Right",
-   "gamefunc_Strafe_Left",
-   "gamefunc_Strafe_Right",
-   "gamefunc_Aim_Up",
-   "gamefunc_Aim_Down",
-   "gamefunc_Weapon_1",
-   "gamefunc_Weapon_2",
-   "gamefunc_Weapon_3",
-   "gamefunc_Weapon_4",
-   "gamefunc_Weapon_5",
-   "gamefunc_Weapon_6",
-   "gamefunc_Weapon_7",
-   "gamefunc_Weapon_8",
-   "gamefunc_Weapon_9",
-   "gamefunc_Weapon_10",
-   "gamefunc_Inventory",
-   "gamefunc_Inventory_Left",
-   "gamefunc_Inventory_Right",
-   "gamefunc_Item_1",
-   "gamefunc_Item_2",
-   "gamefunc_Item_3",
-   "gamefunc_Item_4",
-   "gamefunc_TurnAround",
-   "gamefunc_SendMessage",
-   "gamefunc_Map",
-   "gamefunc_Shrink_Screen",
-   "gamefunc_Enlarge_Screen",
-   "gamefunc_Center_View",
-   "gamefunc_Holster_Weapon",
-   "gamefunc_Show_Opponents_Weapon",
-   "gamefunc_Map_Follow_Mode",
-   "gamefunc_See_Coop_View",
-   "gamefunc_Mouse_Aiming",
-   "gamefunc_Toggle_Crosshair",
-   "gamefunc_Item_5",
-   "gamefunc_Melee",
-   "gamefunc_Next_Weapon",
-   "gamefunc_Previous_Weapon",
-   "gamefunc_Show_Console",
-   "gamefunc_Show_Scoreboard",
-   "gamefunc_Dpad_Select",
-   "gamefunc_Dpad_Aiming",
-   "gamefunc_AutoRun",
-   "gamefunc_Last_Weapon",
-   "gamefunc_Quick_Save",
-   "gamefunc_Quick_Load",
-   "gamefunc_Alt_Weapon",
-   "gamefunc_Third_Person_View",
-   "gamefunc_Toggle_Crouch",
-   };
+#define NUMKEYENTRIES 50
 
+static const char *keydefaults[] =
+{
+    "Move_Forward", "Up", "Kpad8",
+    "Move_Backward", "Down", "Kpad2",
+    "Turn_Left", "Left", "Kpad4",
+    "Turn_Right", "Right", "KPad6",
+    "Strafe", "LAlt", "RAlt",
+    "Fire", "LCtrl", "RCtrl",
+    "Open", "Space", "",
+    "Run", "LShift", "RShift",
+    "AutoRun", "CapLck", "",
+    "Jump", "A", "/",
+    "Crouch", "Z", "",
+    "Look_Up", "PgUp", "Kpad9",
+    "Look_Down", "PgDn", "Kpad3",
+    "Strafe_Left", ",", "",
+    "Strafe_Right", ".", "",
+    "Aim_Up", "Home", "KPad7",
+    "Aim_Down", "End", "Kpad1",
+    "Weapon_1", "1", "",
+    "Weapon_2", "2", "",
+    "Weapon_3", "3", "",
+    "Weapon_4", "4", "",
+    "Weapon_5", "5", "",
+    "Weapon_6", "6", "",
+    "Weapon_7", "7", "",
+    "Weapon_8", "8", "",
+    "Weapon_9", "9", "",
+    "Weapon_10", "0", "",
+    "Inventory", "Enter", "KpdEnt",
+    "Inventory_Left", "[", "",
+    "Inventory_Right", "]", "",
+    "Med_Kit", "M", "",
+    "Smoke_Bomb", "S", "",
+    "Night_Vision", "N", "",
+    "Gas_Bomb", "G", "",
+    "Flash_Bomb", "F", "",
+    "Caltrops", "C", "",
+    "TurnAround", "BakSpc", "",
+    "SendMessage", "T", "",
+    "Map", "Tab", "",
+    "Shrink_Screen", "-", "Kpad-",
+    "Enlarge_Screen", "=", "Kpad+",
+    "Center_View", "KPad5", "",
+    "Holster_Weapon", "ScrLck", "",
+    "Map_Follow_Mode", "F", "",
+    "See_Co_Op_View", "K", "",
+    "Mouse_Aiming", "U", "",
+    "Toggle_Crosshair", "I", "",
+    "Next_Weapon", "'", "",
+    "Previous_Weapon", ";", "",
+    "Show_Menu", "", "",
+    "Show_Console", "NumLck", "",
+};
 
-// classic key order is just integer indices ascending, not listed
-const int32_t keybind_order_modern[NUMGAMEFUNCTIONS] =
-   {
-   // WASD
-   gamefunc_Move_Forward,
-   gamefunc_Move_Backward,
-   gamefunc_Strafe_Left,
-   gamefunc_Strafe_Right,
-   // attacks
-   gamefunc_Fire,
-   gamefunc_Alt_Fire,
-   gamefunc_Quick_Kick,
-   // interact
-   gamefunc_Open,
-   gamefunc_Jump,
-   gamefunc_Crouch,
-   gamefunc_Toggle_Crouch,
-   gamefunc_Run,
-   // inventory
-   gamefunc_Inventory,
-   gamefunc_Inventory_Left,
-   gamefunc_Inventory_Right,
-   gamefunc_MedKit,
-   gamefunc_Jetpack,
-   gamefunc_Steroids,
-   gamefunc_NightVision,
-   gamefunc_Holo_Duke,
-   // weapon selection
-   gamefunc_Next_Weapon,
-   gamefunc_Previous_Weapon,
-   gamefunc_Last_Weapon,
-   gamefunc_Weapon_1,
-   gamefunc_Weapon_2,
-   gamefunc_Weapon_3,
-   gamefunc_Weapon_4,
-   gamefunc_Weapon_5,
-   gamefunc_Weapon_6,
-   gamefunc_Weapon_7,
-   gamefunc_Weapon_8,
-   gamefunc_Weapon_9,
-   gamefunc_Weapon_10,
-   // important utilities
-   gamefunc_Map,
-   gamefunc_Map_Follow_Mode,
-   gamefunc_Third_Person_View,
-   gamefunc_Quick_Save,
-   gamefunc_Quick_Load,
-   // rarely used or usually replaced
-   gamefunc_Holster_Weapon,
-   gamefunc_Alt_Weapon,
-   gamefunc_Aim_Up,
-   gamefunc_Aim_Down,
-   gamefunc_Turn_Left,
-   gamefunc_Turn_Right,
-   gamefunc_Center_View,
-   gamefunc_Look_Up,
-   gamefunc_Look_Down,
-   gamefunc_Look_Left,
-   gamefunc_Look_Right,
-   gamefunc_TurnAround,
-   gamefunc_Dpad_Select,
-   gamefunc_Dpad_Aiming,
-   gamefunc_Shrink_Screen,
-   gamefunc_Enlarge_Screen,
-   gamefunc_Strafe,
-   // toggles that have corresponding menu options
-   gamefunc_Mouse_Aiming,
-   gamefunc_Toggle_Crosshair,
-   gamefunc_AutoRun,
-   // multiplayer
-   gamefunc_SendMessage,
-   gamefunc_Show_Opponents_Weapon,
-   gamefunc_See_Coop_View,
-   gamefunc_Show_Scoreboard,
-   gamefunc_Show_Console,
-   };
-
-int32_t keybind_order_custom[NUMGAMEFUNCTIONS] = {-1};
-
-#ifdef __SETUP__
-
-const char keydefaults[NUMGAMEFUNCTIONS*2][MAXGAMEFUNCLEN] =
-   {
-   "W", "Kpad8",
-   "S", "Kpad2",
-   "Left", "Kpad4",
-   "Right", "KPad6",
-   "LAlt", "RAlt",
-   "RCtrl", "",
-   "E", "",
-   "LShift", "RShift",
-   "", "",
-   "Space", "/",
-   "LCtrl", "",
-   "PgUp", "Kpad9",
-   "PgDn", "Kpad3",
-   "Insert", "Kpad0",
-   "Delete", "Kpad.",
-   "A", "",
-   "D", "",
-   "Home", "KPad7",
-   "End", "Kpad1",
-   "1", "",
-   "2", "",
-   "3", "",
-   "4", "",
-   "5", "",
-   "6", "",
-   "7", "",
-   "8", "",
-   "9", "",
-   "0", "",
-   "Enter", "KpdEnt",
-   "[", "",
-   "]", "",
-   "H", "",
-   "J", "",
-   "N", "",
-   "M", "",
-   "BakSpc", "",
-   "T", "",
-   "Tab", "",
-   "-", "Kpad-",
-   "=", "Kpad+",
-   "KPad5", "",
-   "ScrLck", "",
-   "Y", "",
-   "F", "",
-   "K", "",
-   "", "",
-   "", "",
-   "R", "",
-   "Q", "",
-   "'", "",
-   ";", "",
-   "`", "",
-   "", "",
-   "", "",
-   "", "",
-   "CapLck", "",
-   "X", "",
-   "F6", "",
-   "F9", "",
-   "", "",
-   "F7", "",
-   "C", "",
-   };
-
-const char oldkeydefaults[NUMGAMEFUNCTIONS*2][MAXGAMEFUNCLEN] =
-   {
-   "Up", "Kpad8",
-   "Down", "Kpad2",
-   "Left", "Kpad4",
-   "Right", "KPad6",
-   "LAlt", "RAlt",
-   "LCtrl", "RCtrl",
-   "Space", "",
-   "LShift", "RShift",
-   "", "",
-   "A", "/",
-   "Z", "",
-   "PgUp", "Kpad9",
-   "PgDn", "Kpad3",
-   "Insert", "Kpad0",
-   "Delete", "Kpad.",
-   ",", "",
-   ".", "",
-   "Home", "KPad7",
-   "End", "Kpad1",
-   "1", "",
-   "2", "",
-   "3", "",
-   "4", "",
-   "5", "",
-   "6", "",
-   "7", "",
-   "8", "",
-   "9", "",
-   "0", "",
-   "Enter", "KpdEnt",
-   "[", "",
-   "]", "",
-   "H", "",
-   "J", "",
-   "N", "",
-   "M", "",
-   "BakSpc", "",
-   "T", "",
-   "Tab", "",
-   "-", "Kpad-",
-   "=", "Kpad+",
-   "KPad5", "",
-   "ScrLck", "",
-   "W", "",
-   "F", "",
-   "K", "",
-   "U", "",
-   "I", "",
-   "R", "",
-   "`", "",
-   "'", "",
-   ";", "",
-   "C", "",
-   "", "",
-   "", "",
-   "", "",
-   "CapLck", "",
-   "", "",
-   "F6", "",
-   "F9", "",
-   "", "",
-   "F7", "",
-   "", "",
-   };
-
-static const char * mousedefaults[MAXMOUSEBUTTONS] =
-   {
-   "Fire",
-   "Alt_Fire",
-   "MedKit",
-   "",
-   "Previous_Weapon",
-   "Next_Weapon",
-   };
+static const char *keydefaults_modern[] =
+{
+    "Move_Forward", "W", "Up",
+    "Move_Backward", "S", "Down",
+    "Turn_Left", "Left", "",
+    "Turn_Right", "Right", "",
+    "Strafe", "LAlt", "RAlt",
+    "Fire", "RCtrl", "",
+    "Open", "E", "",
+    "Run", "LShift", "RShift",
+    "AutoRun", "CapLck", "",
+    "Jump", "Space", "/",
+    "Crouch", "LCtrl", "",
+    "Look_Up", "PgUp", "",
+    "Look_Down", "PgDn", "",
+    "Strafe_Left", "A", ",",
+    "Strafe_Right", "D", ".",
+    "Aim_Up", "Home", "",
+    "Aim_Down", "End", "",
+    "Weapon_1", "1", "",
+    "Weapon_2", "2", "",
+    "Weapon_3", "3", "",
+    "Weapon_4", "4", "",
+    "Weapon_5", "5", "",
+    "Weapon_6", "6", "",
+    "Weapon_7", "7", "",
+    "Weapon_8", "8", "",
+    "Weapon_9", "9", "",
+    "Weapon_10", "0", "",
+    "Inventory", "Enter", "",
+    "Inventory_Left", "[", "",
+    "Inventory_Right", "]", "",
+    "Med_Kit", "M", "",
+    "Smoke_Bomb", "B", "",
+    "Night_Vision", "N", "",
+    "Gas_Bomb", "G", "",
+    "Flash_Bomb", "F", "",
+    "Caltrops", "C", "",
+    "TurnAround", "BakSpc", "",
+    "SendMessage", "T", "",
+    "Map", "Tab", "",
+    "Shrink_Screen", "-", "",
+    "Enlarge_Screen", "=", "",
+    "Center_View", "KPad5", "",
+    "Holster_Weapon", "ScrLck", "",
+    "Map_Follow_Mode", "F", "",
+    "See_Co_Op_View", "K", "",
+    "Mouse_Aiming", "", "",
+    "Toggle_Crosshair", "", "",
+    "Next_Weapon", "'", "",
+    "Previous_Weapon", ";", "",
+    "Show_Menu", "", "",
+    "Show_Console", "`", "",
+};
 
 
-static const char * mouseclickeddefaults[MAXMOUSEBUTTONS] =
-   {
-   };
+static const char *mousedefaults[] =
+{
+    "Fire",
+    "Strafe",
+    "Move_Forward",
+    "",
+    ""
+};
+
+static const char *mousedefaults_modern[] =
+{
+    "Fire",
+    "Open",
+    "Alt_Weapon_Mode",
+    "",
+    "Next_Weapon",
+    "Previous_Weapon"
+};
 
 
-#if defined GEKKO
-static const char * joystickdefaults[MAXJOYBUTTONSANDHATS] =
-   {
-   "Open", // A
-   "Fire", // B
-   "Run", // 1
-   "Map", // 2
-   "Previous_Weapon", // -
-   "Next_Weapon", // +
-   "", // Home
-   "Jump", // Z
-   "Crouch", // C
-   "Map", // X
-   "Run", // Y
-   "Jump", // L
-   "Quick_Kick", // R
-   "Crouch", // ZL
-   "Fire", // ZR
-   "Quick_Kick", // D-Pad Up
-   "Inventory_Right", // D-Pad Right
-   "Inventory", // D-Pad Down
-   "Inventory_Left", // D-Pad Left
-   };
+static const char *mouseclickeddefaults[] =
+{
+    "",
+    "Open",
+    "",
+    "",
+    ""
+};
+
+static const char *mouseclickeddefaults_modern[] =
+{
+    "",
+    "",
+    "",
+    "",
+    "",
+    ""
+};
 
 
-static const char * joystickclickeddefaults[MAXJOYBUTTONSANDHATS] =
-   {
-   "",
-   "",
-   "",
-   "",
-   "",
-   "",
-   "",
-   "",
-   "",
-   "",
-   "",
-   "",
-   "Inventory",
-   };
+static const char *mouseanalogdefaults[] =
+{
+    "analog_turning",
+    "analog_moving",
+};
 
 
-static const char * joystickanalogdefaults[MAXJOYAXES] =
-   {
-   "analog_strafing",
-   "analog_moving",
-   "analog_turning",
-   "analog_lookingupanddown",
-   };
-
-
-static const char * joystickdigitaldefaults[MAXJOYDIGITAL] =
-   {
-   };
-#endif
-
-#endif
-#ifdef __cplusplus
-}
-#endif
+static const char *mousedigitaldefaults[] =
+{
+    "",
+    "",
+    "",
+    "",
+};
 #endif

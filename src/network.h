@@ -1,12 +1,13 @@
 //-------------------------------------------------------------------------
 /*
-Copyright (C) 2017 EDuke32 developers and contributors
+Copyright (C) 1997, 2005 - 3D Realms Entertainment
 
-This file is part of EDuke32.
+This file is part of Shadow Warrior version 1.2
 
-EDuke32 is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License version 2
-as published by the Free Software Foundation.
+Shadow Warrior is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,335 +18,172 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+Original Source: 1997 - Frank Maddin and Jim Norwood
+Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
 
-#ifndef netplay_h_
-#define netplay_h_
+#define PACKET_TYPE_MASTER_TO_SLAVE                 0
+#define PACKET_TYPE_SLAVE_TO_MASTER                 1
+//#define PACKET_TYPE_PLAYER_NAME                     3
+#define PACKET_TYPE_MESSAGE                         4
+//#define PACKET_TYPE_GAME_INFO                       8
+#define PACKET_TYPE_BROADCAST                       17
+#define SERVER_GENERATED_BROADCAST                  18
+#define PACKET_TYPE_PROXY                           19
 
-// As of Nov. of 2018, the version of gcc that the Makefile is using is too old for [[maybe_unused]],
-// but __attribute__ is GNU C only.
-#ifdef __GNUC__
-#define EDUKE32_UNUSED __attribute__((unused))
-#else
-#define EDUKE32_UNUSED
-#endif
+#define PACKET_TYPE_NEW_GAME                        30
+//#define PACKET_TYPE_NEW_LEVEL                       31
+#define PACKET_TYPE_PLAYER_OPTIONS                  32
+#define PACKET_TYPE_RTS                             33
+#define PACKET_TYPE_DUMMY                           34
+#define PACKET_TYPE_MENU_LEVEL_QUIT                 35
+#define PACKET_TYPE_NAME_CHANGE                     36
+#define PACKET_TYPE_VERSION                         38
 
-#include "enet.h"
+#define PACKET_TYPE_NULL_PACKET                     127
+#define PACKET_TYPE_PLAYER_READY                    250
+#define PACKET_TYPE_DONT_USE                        255  // old logoff
 
-// net packet specification/compatibility version
-#define NETVERSION    1
-
-extern ENetHost       *g_netClient;
-extern ENetHost       *g_netServer;
-extern ENetPeer       *g_netClientPeer;
-extern char           g_netPassword[32];
-extern int32_t        g_netDisconnect;
-extern int32_t        g_netPlayersWaiting;
-extern enet_uint16    g_netPort;
-extern int32_t        g_networkMode;
-extern int32_t        g_netIndex;
-
-#define NET_REVISIONS 64
-
-enum netchan_t
-{
-    CHAN_MOVE,      // unreliable movement packets
-    CHAN_GAMESTATE, // gamestate changes... frags, respawns, player names, etc
-    CHAN_CHAT,      // chat and RTS
-    CHAN_MISC,      // whatever else
-    CHAN_MAX
-};
-
-
-enum DukePacket_t
-{
-    PACKET_MASTER_TO_SLAVE,
-    PACKET_SLAVE_TO_MASTER,
-
-    PACKET_NUM_PLAYERS,
-    PACKET_PLAYER_INDEX,
-    PACKET_PLAYER_DISCONNECTED,
-    PACKET_PLAYER_SPAWN,
-    PACKET_FRAG,
-    PACKET_ACK,
-    PACKET_AUTH,
-    PACKET_PLAYER_PING,
-    PACKET_PLAYER_READY,
-    PACKET_WORLD_UPDATE, //[75]
-
-    // any packet with an ID higher than PACKET_BROADCAST is rebroadcast by server
-    // so hacked clients can't create fake server packets and get the server to
-    // send them to everyone
-    // newer versions of the netcode also make this determination based on which
-    // channel the packet was broadcast on
-
-    PACKET_BROADCAST,
-    PACKET_NEW_GAME, // [S->C]
-    PACKET_RTS,
-    PACKET_CLIENT_INFO,
-    PACKET_MESSAGE,
-    PACKET_USER_MAP,
-
-    PACKET_MAP_VOTE,
-    PACKET_MAP_VOTE_INITIATE,
-    PACKET_MAP_VOTE_CANCEL,
-};
-
-
-
-enum netdisconnect_t
-{
-    DISC_BAD_PASSWORD = 1,
-    DISC_VERSION_MISMATCH,
-    DISC_INVALID,
-    DISC_SERVER_QUIT,
-    DISC_SERVER_FULL,
-    DISC_KICKED,
-    DISC_BANNED
-};
-
-enum netmode_t
-{
-    NET_CLIENT = 0,
-    NET_SERVER,
-    NET_DEDICATED_CLIENT, // client on dedicated server
-    NET_DEDICATED_SERVER
-};
-
-
-//[75]
-
-typedef struct netWall_s
-{
-    uint16_t netIndex;
-
-    int32_t	x,
-        y,
-        point2,
-        nextwall,
-        nextsector,
-
-        cstat,
-        picnum,
-        overpicnum,
-        shade,
-        pal,
-
-        xrepeat,
-        yrepeat,
-        xpanning,
-        ypanning,
-        lotag,
-
-        hitag,
-        extra;
-
-} netWall_t;
-
-// sector struct with all 32 bit entries
-typedef struct netSector_s
-{
-    uint16_t netIndex;
-
-    int32_t	wallptr,
-        wallnum,
-        ceilingz,
-        floorz,
-        ceilingstat,
-
-        floorstat,
-        ceilingpicnum,
-        ceilingheinum,
-        ceilingshade,
-        ceilingpal,
-
-        ceilingxpanning,
-        ceilingypanning,
-        floorpicnum,
-        floorheinum,
-        floorshade,
-
-        floorpal,
-        floorxpanning,
-        floorypanning,
-        visibility,
-        fogpal,
-
-        lotag,
-        hitag,
-        extra;
-} netSector_t;
-
-const uint64_t cSnapshotMemUsage = NET_REVISIONS *	(
-                                                            (sizeof(netWall_t) * MAXWALLS)
-                                                        +   (sizeof(netSector_t)  * MAXSECTORS)
-                                                        +   (sizeof(netactor_t) * MAXSPRITES)
-                                                    );
-
+#define BIT_CODEC TRUE
+#define SYNC_TEST TRUE
+#define MAXSYNCBYTES 16
 
 #pragma pack(push,1)
-typedef struct netmapstate_s
+// Slave->Master: PlayerIndex = who to send the packet to (-1 = all)
+// Master->Slave: PlayerIndex = who sent the packet originally
+typedef struct
 {
-    uint32_t revisionNumber;
-    int32_t maxActorIndex;
-    netactor_t actor[MAXSPRITES];
-    netWall_t wall[MAXWALLS];
-    netSector_t sector[MAXSECTORS];
+    uint8_t PacketType;  // first byte is always packet type
+    uint8_t PlayerIndex;
+} PACKET_PROXY,*PACKET_PROXYp;
 
-} netmapstate_t;
+typedef struct
+{
+    uint8_t PacketType;  // first byte is always packet type
+    uint8_t FirstPlayerIndex;
+    SWBOOL AutoAim;
+    uint8_t Level;
+    uint8_t Episode;
+    int8_t Skill;
+    uint8_t GameType;
+    SWBOOL HurtTeammate;
+    SWBOOL SpawnMarkers;
+    SWBOOL TeamPlay;
+    uint8_t KillLimit;
+    uint8_t TimeLimit;
+    SWBOOL Nuke;
+} PACKET_NEW_GAME,*PACKET_NEW_GAMEp;
 
+typedef struct
+{
+    uint8_t PacketType;  // first byte is always packet type
+    SWBOOL AutoRun;
+    uint8_t Color;
+    char PlayerName[32];
+} PACKET_OPTIONS,*PACKET_OPTIONSp;
+
+typedef struct
+{
+    uint8_t PacketType;  // first byte is always packet type
+    char PlayerName[32];
+} PACKET_NAME_CHANGE,*PACKET_NAME_CHANGEp;
+
+typedef struct
+{
+    uint8_t PacketType;  // first byte is always packet type
+    uint8_t RTSnum;
+} PACKET_RTS,*PACKET_RTSp;
+
+typedef struct
+{
+    uint8_t PacketType;  // first byte is always packet type
+    int Version;
+} PACKET_VERSION,*PACKET_VERSIONp;
 #pragma pack(pop)
 
-#pragma pack(push,1)
-typedef struct playerupdate_s
+extern uint8_t syncstat[MAXSYNCBYTES];
+extern SWBOOL PredictionOn;
+extern PLAYER PredictPlayer;
+extern PLAYERp ppp;
+extern short predictangpos[MOVEFIFOSIZ];
+extern int predictmovefifoplc;
+extern SWBOOL Prediction;
+extern short NumSyncBytes;
+
+void InitPrediction(PLAYERp pp);
+void DoPrediction(PLAYERp ppp);
+void CorrectPrediction(int actualfifoplc);
+
+//TENSW: safe packet senders
+void netsendpacket(int ind, uint8_t* buf, int len);
+void netbroadcastpacket(uint8_t* buf, int len);
+int netgetpacket(int *ind, uint8_t* buf);
+
+
+enum MultiGameTypes
 {
-    vec3_t pos;
-    vec3_t opos;
-    vec3_t vel;
+    MULTI_GAME_NONE,
+    MULTI_GAME_COMMBAT,
+    MULTI_GAME_COMMBAT_NO_RESPAWN, // JUST a place holder for menus. DO NOT USE!!!
+    MULTI_GAME_COOPERATIVE,
+    MULTI_GAME_AI_BOTS
+};
 
-    fix16_t q16ang;
-    fix16_t q16horiz;
-    fix16_t q16horizoff;
+//extern int16_t MultiGameType;    // defaults to NONE
 
-    int16_t ping;
-    int16_t playerindex;
-    int16_t deadflag;
-    int16_t playerquitflag;
-} playerupdate_t;
-#pragma pack(pop)
-
-#pragma pack(push,1)
-typedef struct newgame_s
+// global net vars
+// not saved in .CFG file
+// used for current game
+typedef struct
 {
-    int8_t header;
-    int8_t connection;
-    int8_t level_number;
-    int8_t volume_number;
-    int8_t player_skill;
-    int8_t monsters_off;
-    int8_t respawn_monsters;
-    int8_t respawn_items;
-    int8_t respawn_inventory;
-    int8_t marker;
-    int8_t ffire;
-    int8_t noexits;
-    int8_t coop;
-} newgame_t;
-#pragma pack(pop)
+    int32_t KillLimit;
+    int32_t TimeLimit;
+    int32_t TimeLimitClock;
+    int16_t MultiGameType; // used to be a stand alone global
+    SWBOOL TeamPlay;
+    SWBOOL HurtTeammate;
+    SWBOOL SpawnMarkers;
+    SWBOOL AutoAim;
+    SWBOOL NoRespawn; // for commbat type games
+    SWBOOL Nuke;
+} gNET,*gNETp;
 
+extern gNET gNet;
 
+typedef struct
+{
+    int Rules,
+        Level,
+        Enemy,
+        Markers,
+        Team,
+        HurtTeam,
+        Kill,
+        Time,
+        Color,
+        Nuke;
+} AUTO_NET, *AUTO_NETp;
 
-extern newgame_t pendingnewgame;
+extern AUTO_NET Auto;
+extern SWBOOL AutoNet;
 
-#ifndef NETCODE_DISABLE
+void UpdateInputs(void);
+void getpackets(void);
+void SendMulitNameChange(char *new_name);
+void InitNetVars(void);
+void InitTimingVars(void);
+void PauseAction(void);
+void ResumeAction(void);
+void ErrorCorrectionQuit(void);
+void Connect(void);
+void waitforeverybody(void);
+SWBOOL MenuCommPlayerQuit(short quit_player);
+void SendVersion(int version);
+void InitNetPlayerOptions(void);
+void CheckVersion(int GameVersion);
+void SW_SendMessage(short pnum,const char *text);
+void PauseGame(void);
+void ResumeGame(void);
 
-// Connect/Disconnect
-void    Net_Connect(const char *srvaddr);
-
-// Packet Handlers
-#endif
-void    Net_GetPackets(void);
-#ifndef NETCODE_DISABLE
-
-void    Net_SendClientInfo(void);
-
-void    Net_SendUserMapName(void);
-
-void    Net_SendMapUpdate(void);
-
-int32_t Net_InsertSprite(int32_t sect, int32_t stat);
-void    Net_DeleteSprite(int32_t spritenum);
-
-void    Net_SendServerUpdates(void);
-
-void    Net_SendClientUpdate(void);
-
-void    Net_SendMessage(void);
-
-void    Net_StartNewGame();
-void    Net_NotifyNewGame();
-void    Net_SendNewGame(int32_t frommenu, ENetPeer *peer);
-
-void    Net_FillNewGame(newgame_t *newgame, int32_t frommenu);
-
-void    Net_SendMapVoteInitiate(void);
-
-void    Net_SendMapVote(int32_t votefor);
-
-void    Net_SendMapVoteCancel(int32_t failed);
-
-void    Net_StoreClientState(void);
-
-//////////
-
-void    Net_ResetPrediction(void);
-void    Net_SpawnPlayer(int32_t player);
-void    Net_WaitForServer(void);
-void    faketimerhandler(void);
-
-void Net_InitMapStateHistory();
-void Net_AddWorldToInitialSnapshot();
-
-// Debugging
-int32_t Dbg_PacketSent(enum DukePacket_t iPacketType);
-
-void DumpMapStateHistory();
-
-void Net_WaitForInitialSnapshot();
-
-#else
-
-// note: don't include faketimerhandler in this
-
-#define Net_Connect(...) ((void)0)
-
-#define Net_SendClientInfo(...) ((void)0)
-
-#define Net_SendUserMapName(...) ((void)0)
-
-#define Net_SendClientSync(...) ((void)0)
-#define Net_ReceiveClientSync(...) ((void)0)
-
-#define Net_SendMapUpdates(...) ((void)0)
-#define Net_ReceiveMapUpdate(...) ((void)0)
-
-#define Net_SendServerUpdates(...) ((void)0)
-
-#define Net_SendClientUpdate(...) ((void)0)
-
-#define Net_SendMessage(...) ((void)0)
-
-#define Net_StartNewGame(...) ((void)0)
-#define Net_SendNewGame(...) ((void)0)
-
-#define Net_FillNewGame(...) ((void)0)
-
-#define Net_SendMapVoteInitiate(...) ((void)0)
-
-#define Net_SendMapVote(...) ((void)0)
-
-#define Net_SendMapVoteCancel(...) ((void)0)
-
-#define Net_ResetPrediction(...) ((void)0)
-#define Net_RestoreMapState(...) ((void)0)
-#define Net_WaitForServer(...) ((void)0)
-
-#define Net_InsertSprite(...) ((void)0)
-#define Net_DeleteSprite(...) ((void)0)
-
-#define Net_NotifyNewGame(...) ((void)0)
-
-#define Net_WaitForInitialSnapshot(...) ((void)0)
-#define Net_SendMapUpdate(...) ((void)0)
-#define Net_StoreClientState(...) ((void)0)
-#define Net_InitMapStateHistory(...) ((void)0)
-#define Net_AddWorldToInitialSnapshot(...) ((void)0)
-#define DumpMapStateHistory(...) ((void)0)
-
-
-
-
-#endif
-
-#endif // netplay_h_

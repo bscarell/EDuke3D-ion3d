@@ -1,12 +1,13 @@
 //-------------------------------------------------------------------------
 /*
-Copyright (C) 2016 EDuke32 developers and contributors
+Copyright (C) 1997, 2005 - 3D Realms Entertainment
 
-This file is part of EDuke32.
+This file is part of Shadow Warrior version 1.2
 
-EDuke32 is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License version 2
-as published by the Free Software Foundation.
+Shadow Warrior is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,741 +18,450 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+Original Source: 1997 - Frank Maddin and Jim Norwood
+Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
+#include "build.h"
 
-#include "cheats.h"
+#include "keys.h"
+#include "names2.h"
+#include "panel.h"
+#include "game.h"
+#include "mytypes.h"
+#include "text.h"
 
-#include "duke3d.h"
-#include "osdcmds.h"
+#include "control.h"
+#include "function.h"
+//#include "inv.h"
 
-char CheatStrings [NUMCHEATS][MAXCHEATLEN] =
+
+SWBOOL CheatInputMode = FALSE;
+char CheatInputString[256];
+SWBOOL EveryCheat = FALSE;
+SWBOOL ResCheat = FALSE;
+
+void ResCheatOn(PLAYERp UNUSED(pp), char *UNUSED(cheat_string))
 {
-#ifndef EDUKE32_STANDALONE
-    "cornholio",    // 0
-    "stuff",        // 1
-    "scotty###",    // 2
-    "coords",       // 3
-    "view",         // 4
-    "time",         // 5
-    "unlock",       // 6
-    "cashman",      // 7
-    "items",        // 8
-    "rate",         // 9
-    "skill#",       // 10
-    "beta",         // 11
-    "hyper",        // 12
-    "monsters",     // 13
-    "<RESERVED>",   // 14
-    "<RESERVED>",   // 15
-    "todd",         // 16
-    "showmap",      // 17
-    "kroz",         // 18
-    "allen",        // 19
-    "clip",         // 20
-    "weapons",      // 21
-    "inventory",    // 22
-    "keys",         // 23
-    "debug",        // 24
-    "<RESERVED>",   // 25
-    "cgs",          // 26
-#endif
-};
+    ResCheat = TRUE;
+}
 
-char CheatDescriptions[NUMCHEATS][MAXCHEATDESC] =
+void VoxCheat(PLAYERp UNUSED(pp), char *UNUSED(cheat_string))
 {
-    "Toggle God Mode",
-    "Give Everything",
-    "Level Warp",
-    "Toggle Coordinate Display",
-    "Toggle 3rd-Person View",
-    "", // time
-    "Toggle All Locks",
-    "Toggle Cashman",
-    "Give All Items",
-    "Toggle Framerate Display",
-    "Change Skill",
-    "", // beta
-    "Toggle Hyper",
-    "Toggle Monsters",
-    "", // <RESERVED>
-    "", // <RESERVED>
-    "Matt Saettler.  matts@saettler.com", // todd
-    "Toggle Show All Map",
-    "", // kroz
-    "", // allen
-    "Toggle Clipping",
-    "Give Weapons",
-    "Give Inventory",
-    "Give Keys",
-    "Toggle Debug Data Dump",
-    "", // <RESERVED>
-    "", // cgs
-};
+    //gs.Voxel ^= 1;
+}
 
-const uint32_t CheatFunctionFlags [NUMCHEATS] =
+void RestartCheat(PLAYERp UNUSED(pp), char *UNUSED(cheat_string))
 {
-    1 << CHEATFUNC_GOD,
-    1 << CHEATFUNC_GIVEEVERYTHING,
-    1 << CHEATFUNC_WARP,
-    1 << CHEATFUNC_COORDS,
-    1 << CHEATFUNC_VIEW,
-    0,
-    1 << CHEATFUNC_UNLOCK,
-    1 << CHEATFUNC_CASHMAN,
-    1 << CHEATFUNC_GIVEALLITEMS,
-    1 << CHEATFUNC_FRAMERATE,
-    1 << CHEATFUNC_SKILL,
-    1 << CHEATFUNC_QUOTEBETA,
-    1 << CHEATFUNC_HYPER,
-    1 << CHEATFUNC_MONSTERS,
-    0,
-    0,
-    1 << CHEATFUNC_QUOTETODD,
-    1 << CHEATFUNC_SHOWMAP,
-    1 << CHEATFUNC_GOD,
-    1 << CHEATFUNC_QUOTEALLEN,
-    1 << CHEATFUNC_CLIP,
-    1 << CHEATFUNC_GIVEWEAPONS,
-    1 << CHEATFUNC_GIVEINVENTORY,
-    1 << CHEATFUNC_GIVEKEYS,
-    1 << CHEATFUNC_DEBUG,
-    0,
-    (1 << CHEATFUNC_GOD) | (1 << CHEATFUNC_GIVEEVERYTHING),
-};
+    ExitLevel = TRUE;
+}
 
-// KEEPINSYNC cheats.h: enum CheatCodeFunctions
-// KEEPINSYNC menus.cpp: MenuEntry_t ME_CheatCodes[]
-const uint8_t CheatFunctionIDs[NUMCHEATS] =
+void RoomCheat(PLAYERp UNUSED(pp), char *UNUSED(cheat_string))
 {
-    CHEAT_CASHMAN,
-    CHEAT_CORNHOLIO,
-    CHEAT_STUFF,
-    CHEAT_WEAPONS,
-    CHEAT_ITEMS,
-    CHEAT_INVENTORY,
-    CHEAT_KEYS,
-    CHEAT_HYPER,
-    CHEAT_VIEW,
-    CHEAT_SHOWMAP,
-    CHEAT_UNLOCK,
-    CHEAT_CLIP,
-    CHEAT_SCOTTY,
-    CHEAT_SKILL,
-    CHEAT_MONSTERS,
-    CHEAT_RATE,
-    CHEAT_BETA,
-    CHEAT_TODD,
-    CHEAT_ALLEN,
-    CHEAT_COORDS,
-    CHEAT_DEBUG,
-};
+    extern SWBOOL FAF_DebugView;
+    FAF_DebugView ^= 1;
+}
 
-#ifndef EDUKE32_STANDALONE
-void G_SetupCheats(void)
+void SecretCheat(PLAYERp UNUSED(pp), char *UNUSED(cheat_string))
 {
-    // KEEPINSYNC: NAM_WW2GI_CHEATS
-    if (WW2GI)
+    gs.Stats = !gs.Stats;
+}
+
+void NextCheat(PLAYERp UNUSED(pp), char *UNUSED(cheat_string))
+{
+    Level++;
+    ExitLevel = TRUE;
+}
+
+void PrevCheat(PLAYERp UNUSED(pp), char *UNUSED(cheat_string))
+{
+    Level--;
+    ExitLevel = TRUE;
+}
+
+void MapCheat(PLAYERp pp, char *UNUSED(cheat_string))
+{
+    automapping ^= 1;
+
+    if (automapping)
+        MapSetAll2D(0);
+    else
+        MapSetAll2D(0xFF);
+
+    sprintf(ds, "AUTOMAPPING %s", automapping ? "ON" : "OFF");
+    PutStringInfo(pp, ds);
+}
+
+
+void LocCheat(PLAYERp UNUSED(pp), char *UNUSED(cheat_string))
+{
+    extern SWBOOL LocationInfo;
+    LocationInfo++;
+    if (LocationInfo > 2)
+        LocationInfo = 0;
+}
+
+
+void WeaponCheat(PLAYERp UNUSED(pp), char *UNUSED(cheat_string))
+{
+    PLAYERp p;
+    short pnum;
+    unsigned int i;
+    USERp u;
+
+    TRAVERSE_CONNECT(pnum)
     {
-#if 0
-        // WWII GI's original cheat prefix temporarily disabled because W conflicts with WSAD movement
-        CheatKeys[0] = CheatKeys[1] = sc_W;
-#else
-        CheatKeys[0] = sc_G;
-        CheatKeys[1] = sc_I;
-#endif
+        p = &Player[pnum];
+        u = User[p->PlayerSprite];
 
-        Bstrcpy(CheatStrings[0], "2god");
-        Bstrcpy(CheatStrings[1], "2blood");
-        Bstrcpy(CheatStrings[2], "2level###");
-        Bstrcpy(CheatStrings[3], "2coords");
-        Bstrcpy(CheatStrings[4], "2view");
-        Bstrcpy(CheatStrings[5], "<RESERVED>");
-        Bstrcpy(CheatStrings[7], "<RESERVED>");
-        Bstrcpy(CheatStrings[8], "<RESERVED>");
-        Bstrcpy(CheatStrings[9], "2rate");
-        Bstrcpy(CheatStrings[10], "2skill");
-        Bstrcpy(CheatStrings[11], "<RESERVED>");
-        Bstrcpy(CheatStrings[12], "<RESERVED>");
-        Bstrcpy(CheatStrings[13], "<RESERVED>");
-        Bstrcpy(CheatStrings[16], "2matt");
-        Bstrcpy(CheatStrings[17], "2showmap");
-        Bstrcpy(CheatStrings[18], "2ryan");
-        Bstrcpy(CheatStrings[19], "<RESERVED>");
-        Bstrcpy(CheatStrings[20], "2clip");
-        Bstrcpy(CheatStrings[21], "2weapons");
-        Bstrcpy(CheatStrings[22], "2inventory");
-        Bstrcpy(CheatStrings[23], "<RESERVED>");
-        Bstrcpy(CheatStrings[24], "2debug");
-        Bstrcpy(CheatStrings[26], "2cgs");
-
-        Bstrcpy(g_gametypeNames[0], "GI Match (Spawn)");
-        Bstrcpy(g_gametypeNames[2], "GI Match (No Spawn)");
-}
-    else if (NAM)
-    {
-        CheatKeys[0] = sc_N;
-        CheatKeys[1] = sc_V;
-
-        Bstrcpy(CheatStrings[0], "acaleb");
-        Bstrcpy(CheatStrings[1], "ablood");
-        Bstrcpy(CheatStrings[2], "alevel###");
-        Bstrcpy(CheatStrings[3], "acoords");
-        Bstrcpy(CheatStrings[4], "aview");
-        Bstrcpy(CheatStrings[5], "<RESERVED>");
-        Bstrcpy(CheatStrings[7], "<RESERVED>");
-        Bstrcpy(CheatStrings[8], "<RESERVED>");
-        Bstrcpy(CheatStrings[9], "arate");
-        Bstrcpy(CheatStrings[10], "askill");
-        Bstrcpy(CheatStrings[11], "<RESERVED>");
-        Bstrcpy(CheatStrings[12], "ahyper");
-        Bstrcpy(CheatStrings[13], "<RESERVED>");
-        Bstrcpy(CheatStrings[16], "amatt");
-        Bstrcpy(CheatStrings[17], "ashowmap");
-        Bstrcpy(CheatStrings[18], "agod");
-        Bstrcpy(CheatStrings[19], "<RESERVED>");
-        Bstrcpy(CheatStrings[20], "aclip");
-        Bstrcpy(CheatStrings[21], "aweapons");
-        Bstrcpy(CheatStrings[22], "ainventory");
-        Bstrcpy(CheatStrings[23], "<RESERVED>");
-        Bstrcpy(CheatStrings[24], "adebug");
-        Bstrcpy(CheatStrings[26], "acgs");
-
-        Bstrcpy(g_gametypeNames[0], "GruntMatch (Spawn)");
-        Bstrcpy(g_gametypeNames[2], "GruntMatch (No Spawn)");
-    }
-}
-#endif
-
-static void doinvcheat(DukePlayer_t * const pPlayer, int32_t invidx, int32_t defaultnum, int32_t event)
-{
-    defaultnum = VM_OnEventWithReturn(event, pPlayer->i, myconnectindex, defaultnum);
-    if (defaultnum >= 0)
-        pPlayer->inv_amount[invidx] = defaultnum;
-}
-
-static void G_CheatGetInv(DukePlayer_t *pPlayer)
-{
-    doinvcheat(pPlayer, GET_STEROIDS, 400, EVENT_CHEATGETSTEROIDS);
-    doinvcheat(pPlayer, GET_HEATS, 1200, EVENT_CHEATGETHEAT);
-    doinvcheat(pPlayer, GET_BOOTS, 200, EVENT_CHEATGETBOOT);
-    doinvcheat(pPlayer, GET_SHIELD, 100, EVENT_CHEATGETSHIELD);
-    doinvcheat(pPlayer, GET_SCUBA, 6400, EVENT_CHEATGETSCUBA);
-    doinvcheat(pPlayer, GET_HOLODUKE, 2400, EVENT_CHEATGETHOLODUKE);
-    doinvcheat(pPlayer, GET_JETPACK, 1600, EVENT_CHEATGETJETPACK);
-    doinvcheat(pPlayer, GET_FIRSTAID, pPlayer->max_player_health, EVENT_CHEATGETFIRSTAID);
-}
-
-static void end_cheat(DukePlayer_t * const pPlayer)
-{
-    pPlayer->cheat_phase = 0;
-    g_cheatBufLen = 0;
-    KB_FlushKeyboardQueue();
-    KB_ClearKeysDown();
-}
-
-int g_cheatBufLen;
-static int8_t cheatbuf[MAXCHEATLEN];
-
-void G_DoCheats(void)
-{
-    auto const pPlayer = g_player[myconnectindex].ps;
-    int consoleCheat = 0;
-    int cheatNum;
-
-    if (osdcmd_cheatsinfo_stat.cheatnum != -1)
-    {
-        cheatNum = osdcmd_cheatsinfo_stat.cheatnum;
-
-        if (!FURY && ud.player_skill == 4)
+        if (!TEST(p->Flags, PF_TWO_UZI))
         {
-            switch (cheatNum)
-            {
-            case CHEAT_DEBUG:
-            case CHEAT_COORDS:
-            case CHEAT_RATE:
-            case CHEAT_RESERVED:
-            case CHEAT_RESERVED2:
-            case CHEAT_RESERVED3:
-                break;
-            default:
-                P_DoQuote(QUOTE_CHEATS_DISABLED, pPlayer);
-                osdcmd_cheatsinfo_stat.cheatnum = -1;
-                return;
-            }
+            SET(p->Flags, PF_TWO_UZI);
+            SET(p->Flags, PF_PICKED_UP_AN_UZI);
         }
 
-        // JBF 20030914
-        osdcmd_cheatsinfo_stat.cheatnum = -1;
-        consoleCheat = 1;
-    }
+        // ALL WEAPONS
+        if (!SW_SHAREWARE)
+            p->WpnFlags = 0xFFFFFFFF;
+        else
+            p->WpnFlags = 0x0000207F;  // Disallows high weapon cheat in shareware
 
-    static int volumeOne = 0;
-
-    if (VOLUMEONE && !volumeOne)
-    {
-        // change "scotty###" to "scotty##"
-        uint32_t const warpend = Bstrlen(CheatStrings[2]);
-        if (strcmp(&CheatStrings[2][warpend-3], "###") == 0)
-            CheatStrings[2][warpend-1] = '\0';
-
-        Bstrcpy(CheatStrings[6], "<RESERVED>");
-        volumeOne = 1;
-    }
-
-    if (consoleCheat && numplayers < 2 && ud.recstat == 0)
-        goto FOUNDCHEAT;
-
-    if (pPlayer->gm & (MODE_TYPE|MODE_MENU))
-        return;
-
-    if (pPlayer->cheat_phase == 1)
-    {
-        int ch;
-
-        while (KB_KeyWaiting())
+        for (i = 0; i < SIZ(p->WpnAmmo); i++)
         {
-            ch = Btolower(KB_GetCh());
+            p->WpnAmmo[i] = DamageData[i].max_ammo;
+        }
 
-            if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')))
-            {
-                pPlayer->cheat_phase = 0;
-                g_cheatBufLen = 0;
-                //                P_DoQuote(QUOTE_46,pPlayer);
-                return;
-            }
+        PlayerUpdateWeapon(p, u->WeaponNum);
+    }
+}
 
-            cheatbuf[g_cheatBufLen++] = (int8_t) ch;
-            // This assertion is not obvious, but it should hold because of the
-            // cheat string matching logic below.
-            Bassert(g_cheatBufLen < (signed)sizeof(cheatbuf));
-            cheatbuf[g_cheatBufLen] = 0;
-            //            KB_ClearKeysDown();
 
-            for (cheatNum=0; cheatNum < NUMCHEATCODES; cheatNum++)
-            {
-                for (bssize_t j = 0; j<g_cheatBufLen; j++)
-                {
-                    if (cheatbuf[j] == CheatStrings[cheatNum][j] || (CheatStrings[cheatNum][j] == '#' && ch >= '0' && ch <= '9'))
-                    {
-                        if (CheatStrings[cheatNum][j+1] == 0) goto FOUNDCHEAT;
-                        if (j == g_cheatBufLen-1) return;
-                    }
-                    else break;
-                }
-            }
+void GodCheat(PLAYERp pp, char *UNUSED(cheat_string))
+{
+    //
+    // GOD mode
+    //
+    GodMode ^= 1;
 
-            pPlayer->cheat_phase = 0;
-            g_cheatBufLen = 0;
+    sprintf(ds, "GOD MODE %s", GodMode ? "ON" : "OFF");
+    PutStringInfo(pp, ds);
+}
+
+void ClipCheat(PLAYERp pp, char *UNUSED(cheat_string))
+{
+    FLIP(pp->Flags, PF_CLIP_CHEAT);
+
+    sprintf(ds, "NO CLIP MODE %s", TEST(pp->Flags, PF_CLIP_CHEAT) ? "ON" : "OFF");
+    PutStringInfo(pp, ds);
+}
+
+void WarpCheat(PLAYERp pp, char *cheat_string)
+{
+    char *cp = cheat_string;
+    int level_num;
+
+    cp += sizeof("swtrek")-1;
+    level_num = atol(cp);
+
+    //int episode_num;
+    //DSPRINTF(ds,"ep %d, lev %d",episode_num, level_num);
+    //MONO_PRINT(ds);
+
+    if (!SW_SHAREWARE)
+    {
+        if (level_num > 28 || level_num < 1)
             return;
-
-        FOUNDCHEAT:;
-
-            if (cheatNum == CHEAT_SCOTTY)
-            {
-                size_t const i = Bstrlen(CheatStrings[cheatNum])-3+VOLUMEONE;
-                if (!consoleCheat)
-                {
-                    // JBF 20030914
-                    int32_t volnume, levnume;
-                    if (VOLUMEALL)
-                    {
-                        volnume = cheatbuf[i] - '0';
-                        levnume = (cheatbuf[i+1] - '0')*10+(cheatbuf[i+2]-'0');
-                    }
-                    else
-                    {
-                        volnume = cheatbuf[i] - '0';
-                        levnume = cheatbuf[i+1] - '0';
-                    }
-
-                    volnume--;
-                    levnume--;
-
-                    ud.m_volume_number = volnume;
-                    ud.m_level_number = levnume;
-                }
-                else
-                {
-                    // JBF 20030914
-                    ud.m_volume_number = osdcmd_cheatsinfo_stat.volume;
-                    ud.m_level_number = osdcmd_cheatsinfo_stat.level;
-                }
-            }
-            else if (cheatNum == CHEAT_SKILL)
-            {
-                if (!consoleCheat)
-                {
-                    size_t const i = Bstrlen(CheatStrings[cheatNum])-1;
-                    ud.m_player_skill = cheatbuf[i] - '1';
-                }
-                else
-                {
-                    ud.m_player_skill = osdcmd_cheatsinfo_stat.volume;
-                }
-            }
-
-            int const originalCheatNum = cheatNum;
-            cheatNum = VM_OnEventWithReturn(EVENT_ACTIVATECHEAT, pPlayer->i, myconnectindex, cheatNum);
-
-            // potential cleanup
-            if (originalCheatNum != cheatNum)
-            {
-                if (originalCheatNum == CHEAT_SCOTTY)
-                {
-                    ud.m_volume_number = ud.volume_number;
-                    ud.m_level_number = ud.level_number;
-                }
-                else if (originalCheatNum == CHEAT_SKILL)
-                {
-                    ud.m_player_skill = ud.player_skill;
-                }
-            }
-
-            {
-                switch (cheatNum)
-                {
-                case CHEAT_WEAPONS:
-                {
-                    int const weaponLimit = (VOLUMEONE) ? SHRINKER_WEAPON : MAX_WEAPONS;
-
-                    for (bssize_t weaponNum = PISTOL_WEAPON; weaponNum < weaponLimit; weaponNum++)
-                    {
-                        P_AddAmmo(pPlayer, weaponNum, pPlayer->max_ammo_amount[weaponNum]);
-                        pPlayer->gotweapon |= (1<<weaponNum);
-                    }
-
-                    P_DoQuote(QUOTE_CHEAT_ALL_WEAPONS, pPlayer);
-
-                    end_cheat(pPlayer);
-                }
-                    return;
-
-                case CHEAT_INVENTORY:
-                    G_CheatGetInv(pPlayer);
-                    P_DoQuote(QUOTE_CHEAT_ALL_INV, pPlayer);
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_KEYS:
-                    pPlayer->got_access =  7;
-                    KB_FlushKeyboardQueue();
-                    P_DoQuote(QUOTE_CHEAT_ALL_KEYS, pPlayer);
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_DEBUG:
-                    g_Debug = 1-g_Debug;
-
-                    G_DumpDebugInfo();
-                    Bsprintf(tempbuf, "Gamevars dumped to log");
-                    G_AddUserQuote(tempbuf);
-                    Bsprintf(tempbuf, "Map dumped to debug.map");
-                    G_AddUserQuote(tempbuf);
-                    end_cheat(pPlayer);
-                    break;
-
-                case CHEAT_CLIP:
-                    ud.noclip = !ud.noclip;
-                    P_DoQuote(QUOTE_CHEAT_NOCLIP-!ud.noclip, pPlayer);
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_RESERVED2:
-                    pPlayer->player_par = 0;
-                    pPlayer->gm = MODE_EOL;
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_ALLEN:
-                    P_DoQuote(QUOTE_CHEAT_ALLEN, pPlayer);
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_CORNHOLIO:
-                case CHEAT_KROZ:
-                case CHEAT_COMEGETSOME:
-                {
-                    const int32_t pi = pPlayer->i;
-
-                    ud.god = 1-ud.god;
-
-                    if (ud.god)
-                    {
-                        pus = 1;
-                        pub = 1;
-                        sprite[pi].cstat = 257;
-
-                        actor[pi].t_data[0] = 0;
-                        actor[pi].t_data[1] = 0;
-                        actor[pi].t_data[2] = 0;
-                        actor[pi].t_data[3] = 0;
-                        actor[pi].t_data[4] = 0;
-                        actor[pi].t_data[5] = 0;
-
-                        sprite[pi].hitag = 0;
-                        sprite[pi].lotag = 0;
-                        sprite[pi].pal = pPlayer->palookup;
-
-                        if (cheatNum != CHEAT_COMEGETSOME)
-                        {
-                            P_DoQuote(QUOTE_CHEAT_GODMODE_ON, pPlayer);
-                        }
-                        else
-                        {
-                            Bstrcpy(apStrings[QUOTE_RESERVED4], "Come Get Some!");
-
-                            S_PlaySound(DUKE_GETWEAPON2);
-                            P_DoQuote(QUOTE_RESERVED4, pPlayer);
-                            G_CheatGetInv(pPlayer);
-
-                            for (bssize_t weaponNum = PISTOL_WEAPON; weaponNum < MAX_WEAPONS; weaponNum++)
-                                pPlayer->gotweapon |= (1<<weaponNum);
-
-                            for (bssize_t weaponNum = PISTOL_WEAPON; weaponNum < MAX_WEAPONS; weaponNum++)
-                                P_AddAmmo(pPlayer, weaponNum, pPlayer->max_ammo_amount[weaponNum]);
-
-                            pPlayer->got_access = 7;
-                        }
-                    }
-                    else
-                    {
-                        sprite[pi].extra = pPlayer->max_player_health;
-                        actor[pi].htextra = -1;
-                        pPlayer->last_extra = pPlayer->max_player_health;
-                        P_DoQuote(QUOTE_CHEAT_GODMODE_OFF, pPlayer);
-                    }
-
-                    sprite[pi].extra = pPlayer->max_player_health;
-                    actor[pi].htextra = 0;
-
-                    if (cheatNum != CHEAT_COMEGETSOME)
-                        pPlayer->dead_flag = 0;
-
-                    end_cheat(pPlayer);
-                    return;
-                }
-
-                case CHEAT_STUFF:
-                {
-                    int const weaponLimit = (VOLUMEONE) ? SHRINKER_WEAPON : MAX_WEAPONS;
-
-                    for (bssize_t weaponNum = PISTOL_WEAPON; weaponNum < weaponLimit; weaponNum++)
-                        pPlayer->gotweapon |= (1<<weaponNum);
-
-                    for (bssize_t weaponNum = PISTOL_WEAPON; weaponNum < weaponLimit; weaponNum++)
-                        P_AddAmmo(pPlayer, weaponNum, pPlayer->max_ammo_amount[weaponNum]);
-
-                    G_CheatGetInv(pPlayer);
-                    pPlayer->got_access = 7;
-                    P_DoQuote(QUOTE_CHEAT_EVERYTHING, pPlayer);
-
-                    //                    P_DoQuote(QUOTE_21,pPlayer);
-                    pPlayer->inven_icon = ICON_FIRSTAID;
-
-                    end_cheat(pPlayer);
-                    return;
-                }
-
-                case CHEAT_SCOTTY:
-                {
-                    int32_t const volnume = ud.m_volume_number, levnume = ud.m_level_number;
-
-                    if ((!VOLUMEONE || volnume == 0) && (unsigned)volnume < (unsigned)g_volumeCnt &&
-                        (unsigned)levnume < MAXLEVELS && g_mapInfo[volnume*MAXLEVELS + levnume].filename != NULL)
-                    {
-                        ud.volume_number = volnume;
-                        ud.level_number = levnume;
-
-#if 0
-                        if (numplayers > 1 && g_netServer)
-                            Net_NewGame(volnume, levnume);
-                        else
-#endif
-                            pPlayer->gm |= MODE_RESTART;
-                    }
-
-                    end_cheat(pPlayer);
-                    return;
-                }
-
-                case CHEAT_SKILL:
-                    ud.player_skill = ud.m_player_skill;
-
-#if 0
-                    if (numplayers > 1 && g_netServer)
-                        Net_NewGame(ud.m_volume_number, ud.m_level_number);
-                    else
-#endif
-                        pPlayer->gm |= MODE_RESTART;
-
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_COORDS:
-#ifdef USE_OPENGL
-                    if (++ud.coords >= 3) ud.coords = 0;
-#else
-                    if (++ud.coords >= 2) ud.coords = 0;
-#endif
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_VIEW:
-                    pPlayer->over_shoulder_on ^= 1;
-                    CAMERADIST = 0;
-                    CAMERACLOCK = (int32_t) totalclock;
-                    //                    P_DoQuote(QUOTE_CHEATS_DISABLED,pPlayer);
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_TIME:
-                    //                    P_DoQuote(QUOTE_21,pPlayer);
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_UNLOCK:
-                    if (VOLUMEONE) return;
-
-                    for (bssize_t i=numsectors-1; i>=0; i--) //Unlock
-                    {
-                        int const lotag = sector[i].lotag;
-                        if (lotag == -1 || lotag == 32767) continue;
-                        if ((lotag & 0x7fff) > 2)
-                        {
-                            if (lotag & (uint16_t)~16384u)
-                                sector[i].lotag &= (uint16_t)~16384u;
-                            G_OperateSectors(i, pPlayer->i);
-                        }
-                    }
-                    G_OperateForceFields(pPlayer->i, -1);
-
-                    P_DoQuote(QUOTE_CHEAT_UNLOCK, pPlayer);
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_CASHMAN:
-                    ud.cashman = 1-ud.cashman;
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_ITEMS:
-                    G_CheatGetInv(pPlayer);
-                    pPlayer->got_access = 7;
-                    P_DoQuote(QUOTE_CHEAT_EVERYTHING, pPlayer);
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_SHOWMAP: // SHOW ALL OF THE MAP TOGGLE;
-                    ud.showallmap = !ud.showallmap;
-
-                    for (char & i : show2dsector)
-                        i = ud.showallmap*255;
-
-                    P_DoQuote(ud.showallmap ? QUOTE_SHOW_MAP_ON : QUOTE_SHOW_MAP_OFF,
-                        pPlayer);
-
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_TODD:
-                    if (NAM)
-                    {
-                        Bstrcpy(apStrings[QUOTE_RESERVED4], CheatDescriptions[CHEAT_TODD]);
-                        P_DoQuote(QUOTE_RESERVED4, pPlayer);
-                    }
-                    else
-                    {
-                        P_DoQuote(QUOTE_CHEAT_TODD, pPlayer);
-                    }
-
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_RATE:
-                    if (++ud.showfps > 3)
-                        ud.showfps = 0;
-
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_BETA:
-                    P_DoQuote(QUOTE_CHEAT_BETA, pPlayer);
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_HYPER:
-                    pPlayer->inv_amount[GET_STEROIDS] = 399;
-                    pPlayer->inv_amount[GET_HEATS] = 1200;
-                    P_DoQuote(QUOTE_CHEAT_STEROIDS, pPlayer);
-                    end_cheat(pPlayer);
-                    return;
-
-                case CHEAT_MONSTERS:
-                {
-                    const char *s [] = { "On", "Off", "On (2)" };
-
-                    if (++g_noEnemies == 3)
-                        g_noEnemies = 0;
-
-                    Bsprintf(apStrings[QUOTE_RESERVED4], "Monsters: %s", s[g_noEnemies]);
-                    P_DoQuote(QUOTE_RESERVED4, pPlayer);
-
-                    end_cheat(pPlayer);
-                    return;
-                }
-
-                case CHEAT_RESERVED:
-                case CHEAT_RESERVED3:
-                    ud.eog = 1;
-                    pPlayer->player_par = 0;
-                    pPlayer->gm |= MODE_EOL;;
-                    end_cheat(pPlayer);
-                    return;
-
-                default:
-                    end_cheat(pPlayer);
-                    return;
-                }
-            }
-        }
     }
     else
     {
-        if (KB_KeyPressed((uint8_t) CheatKeys[0]))
+        if (level_num > 4 || level_num < 1)
+            return;
+    }
+
+    Level = level_num;
+    ExitLevel = TRUE;
+
+    sprintf(ds, "ENTERING %1d", Level);
+    PutStringInfo(pp, ds);
+}
+
+void ItemCheat(PLAYERp pp, char *cheat_string)
+{
+    //
+    // Get all ITEMS
+    //
+    PLAYERp p;
+    short pnum;
+    short inv;
+    int i;
+
+    PutStringInfo(pp, "ITEMS");
+
+    TRAVERSE_CONNECT(pnum)
+    {
+        p = &Player[pnum];
+        memset(p->HasKey, TRUE, sizeof(p->HasKey));
+
+        p->WpnShotgunAuto = 50;
+        p->WpnRocketHeat = 5;
+        p->WpnRocketNuke = 1;
+        p->Armor = 100;
+
+        for (inv = 0; inv < MAX_INVENTORY; inv++)
         {
-            if (pPlayer->cheat_phase >= 0 && numplayers < 2 && ud.recstat == 0)
-            {
-                if (CheatKeys[0] == CheatKeys[1])
-                    KB_ClearKeyDown((uint8_t) CheatKeys[0]);
-                pPlayer->cheat_phase = -1;
-            }
+            p->InventoryPercent[inv] = 100;
+            //p->InventoryAmount[inv] = 1;
+            p->InventoryAmount[inv] = InventoryData[inv].MaxInv;
+            //PlayerUpdateInventory(p, inv);
         }
 
-        if (KB_KeyPressed((uint8_t) CheatKeys[1]))
+        PlayerUpdateInventory(p, p->InventoryNum);
+        //p->InventoryNum = 0;
+    }
+
+    for (i=0; i<numsectors; i++)
+    {
+        if (SectUser[i] && SectUser[i]->stag == SECT_LOCK_DOOR)
+            SectUser[i]->number = 0;  // unlock all doors of this type
+    }
+
+    WeaponCheat(pp, cheat_string);
+    PlayerUpdateKeys(pp);
+}
+
+void EveryCheatToggle(PLAYERp pp, char *cheat_string)
+{
+    EveryCheat ^= 1;
+
+    WeaponCheat(pp, cheat_string);
+    GodCheat(pp, cheat_string);
+    ItemCheat(pp, cheat_string);
+
+    sprintf(ds, "EVERY CHEAT %s", EveryCheat ? "ON" : "OFF");
+    PutStringInfo(pp, ds);
+}
+
+void SaveCheat(PLAYERp pp, char *UNUSED(cheat_string))
+{
+    saveboard("swsave.map", &pp->pos,
+              fix16_to_int(pp->q16ang), pp->cursectnum);
+}
+
+void GeorgeFunc(PLAYERp pp, char *UNUSED(cheat_string))
+{
+    PlayerSound(DIGI_TAUNTAI9,&pp->posx,&pp->posy,&pp->posz,v3df_dontpan|v3df_doppler|v3df_follow,pp);
+}
+
+void BlackburnFunc(PLAYERp pp, char *UNUSED(cheat_string))
+{
+    PlayerSound(DIGI_TAUNTAI3,&pp->posx,&pp->posy,&pp->posz,v3df_dontpan|v3df_doppler|v3df_follow,pp);
+}
+
+int cheatcmp(const char *str1, const char *str2, int len)
+{
+    const char *cp1 = str1;
+    const char *cp2 = str2;
+
+    do
+    {
+        if (*cp1 != *cp2)
         {
-            if (pPlayer->cheat_phase == -1)
+            if (!((*cp1 == '#' && isdigit(*cp2)) || (*cp2 == '#' && isdigit(*cp1))))
+                return -1;
+        }
+
+        cp1++;
+        cp2++;
+    }
+    while (--len);
+
+    return 0;
+}
+
+
+#define CF_ALL    BIT(0)
+#define CF_NOTSW  BIT(1)
+
+typedef struct
+{
+    const char *CheatInputCode;
+    void (*CheatInputFunc)(PLAYERp, char *);
+    char flags;
+} CHEAT_INFO, *CHEAT_INFOp;
+
+
+CHEAT_INFO ci[] =
+{
+    {"swchan",      GodCheat, 0},
+    {"swgimme",     ItemCheat, 0},
+    {"swtrek##",    WarpCheat, 0},
+    {"swgreed",     EveryCheatToggle, 0},
+    {"swghost",      ClipCheat, 0},
+
+    {"swstart",     RestartCheat, 0},
+
+    {"swres",       ResCheatOn, 0},
+    {"swloc",       LocCheat, 0},
+    {"swmap",       MapCheat, 0},
+    {"swsave",      SaveCheat, CF_ALL},
+    {"swroom",      RoomCheat, CF_NOTSW}, // Room above room dbug
+#if DEBUG
+    {"swsecret",    SecretCheat, CF_ALL},
+#endif
+};
+
+
+// !JIM! My simplified version of CheatInput which simply processes MessageInputString
+void CheatInput(void)
+{
+    SWBOOL match = FALSE;
+    unsigned int i;
+
+    //if (CommEnabled)
+    //    return;
+
+    strcpy(CheatInputString,MessageInputString);
+
+    // make sure string is lower cased
+    Bstrlwr(CheatInputString);
+
+    // check for at least one single match
+    for (i = 0; i < SIZ(ci); i++)
+    {
+        // compare without the NULL
+        if (cheatcmp(CheatInputString, ci[i].CheatInputCode, strlen(CheatInputString)) == 0)
+        {
+
+            // if they are equal in length then its a complet match
+            if (strlen(CheatInputString) == strlen(ci[i].CheatInputCode))
             {
-                if (!FURY && ud.player_skill == 4)
+                match = TRUE;
+                CheatInputMode = FALSE;
+
+                if (TEST(ci[i].flags, CF_NOTSW) && SW_SHAREWARE)
+                    return;
+
+                if (!TEST(ci[i].flags, CF_ALL))
                 {
-                    P_DoQuote(QUOTE_CHEATS_DISABLED, pPlayer);
-                    pPlayer->cheat_phase = 0;
+                    if (CommEnabled)
+                        return;
+
+                    if (Skill >= 3)
+                    {
+                        PutStringInfo(Player, "You're too skillful to cheat\n");
+                        return;
+                    }
                 }
-                else
-                {
-                    pPlayer->cheat_phase = 1;
-                    //                    P_DoQuote(QUOTE_25,pPlayer);
-                }
-                g_cheatBufLen = 0;
-                KB_FlushKeyboardQueue();
+
+                if (ci[i].CheatInputFunc)
+                    (*ci[i].CheatInputFunc)(Player, CheatInputString);
+
+                return;
             }
-            else if (pPlayer->cheat_phase != 0)
+            else
             {
-                pPlayer->cheat_phase = 0;
-                g_cheatBufLen = 0;
-                KB_ClearKeyDown((uint8_t) CheatKeys[0]);
-                KB_ClearKeyDown((uint8_t) CheatKeys[1]);
+                match = TRUE;
+                break;
             }
         }
     }
+
+    if (!match)
+    {
+        ////DSPRINTF(ds,"Lost A Match %s", CheatInputString);
+        //MONO_PRINT(ds);
+
+        CheatInputMode = FALSE;
+    }
 }
+
+/*    OLD CODE
+void CheatInput(void)
+    {
+    static SWBOOL cur_show;
+    signed char MNU_InputString(char *, short);
+    int ret;
+    SWBOOL match = FALSE;
+    short i;
+
+    // don't use InputMode here - its set for CheatInputMode
+    if (MessageInputMode || MenuInputMode)
+        return;
+
+    if (!CheatInputMode)
+        {
+        if (KEY_PRESSED(KEYSC_S))
+            {
+            //KEY_PRESSED(KEYSC_S) = FALSE;
+            CheatInputMode = TRUE;
+            strcpy(CheatInputString,"s");
+            }
+        }
+
+    if (CheatInputMode)
+        {
+        // get new chars
+        ret = MNU_InputString(CheatInputString, 320-20);
+
+        // quick check input
+        switch (ret)
+            {
+            case FALSE: // Input finished (RETURN)
+            case -1: // Cancel Input (pressed ESC) or Err
+                CheatInputMode = FALSE;
+                KB_FlushKeyboardQueue();
+                return;
+
+            case TRUE: // Got input
+                break;
+            }
+
+        // make sure string is lower cased
+        Bstrlwr(CheatInputString);
+
+        // check for at least one single match
+        for (i = 0; i < SIZ(ci); i++)
+            {
+            // compare without the NULL
+            if (cheatcmp(CheatInputString, ci[i].CheatInputCode, strlen(CheatInputString)) == 0)
+                {
+                ////DSPRINTF(ds,"%s",CheatInputString);
+                //MONO_PRINT(ds);
+
+                // if they are equal in length then its a complet match
+                if (strlen(CheatInputString) == strlen(ci[i].CheatInputCode))
+                    {
+                    ////DSPRINTF(ds,"Found A Match %s", CheatInputString);
+                    //MONO_PRINT(ds);
+
+                    match = TRUE;
+
+                    CheatInputMode = FALSE;
+                    KB_FlushKeyboardQueue();
+
+                    if (ci[i].CheatInputFunc)
+                        (*ci[i].CheatInputFunc)(Player, CheatInputString);
+
+                    return;
+                    }
+                else
+                    {
+                    match = TRUE;
+                    break;
+                    }
+                }
+            }
+
+        if (!match)
+            {
+            ////DSPRINTF(ds,"Lost A Match %s", CheatInputString);
+            //MONO_PRINT(ds);
+
+            CheatInputMode = FALSE;
+            KB_FlushKeyboardQueue();
+            }
+        }
+    }
+
+*/

@@ -1,12 +1,13 @@
 //-------------------------------------------------------------------------
 /*
-Copyright (C) 2016 EDuke32 developers and contributors
+Copyright (C) 1997, 2005 - 3D Realms Entertainment
 
-This file is part of EDuke32.
+This file is part of Shadow Warrior version 1.2
 
-EDuke32 is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License version 2
-as published by the Free Software Foundation.
+Shadow Warrior is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,531 +18,323 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+Original Source: 1997 - Frank Maddin and Jim Norwood
+Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
 
-#ifndef menus_h_
-#define menus_h_
+// MENUS.H
+// Contains type definitions for all pop up menus
 
-#include "common.h"
-#include "compat.h"
-#include "pragmas.h"
-#include "vfs.h"
-#include "function.h"
+#ifndef MENUS_PUBLIC_
+#define MENUS_PUBLIC_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#define MENU_SHADE_DEFAULT 0
+#define MENU_SHADE_INACTIVE 20
 
-#if defined EDUKE32_TOUCH_DEVICES
-# define EDUKE32_RETAIL_MENU
-# define EDUKE32_ANDROID_MENU
-#endif
+typedef enum
+{
+    ct_mainmenu, ct_savemenu, ct_loadmenu, ct_soundmenu, ct_optionmenu, ct_quickloadmenu,
+    ct_quitmenu, ct_ordermenu, ct_episodemenu, ct_max
+} CTLType;
 
-extern int32_t cvar_kbo_type;
-extern int32_t cvar_kbconfirm;
+extern SWBOOL UsingMenus;
+extern int SENSITIVITY;
+extern CTLType ControlPanelType;
+extern int16_t MenuTextShade;
+extern int16_t MenuTextPalette;
 
-// #define EDUKE32_SIMPLE_MENU
+// Prototypes
+//void MNU_DoMenu( CTLType type );
+void MNU_InitMenus(void);
+//void (*CustomRefresh)(void);
+//void MNU_Refresh( void );
+void MNU_DrawMenu(void);    // This is used in drawscreen to refresh menus in
+// multiplay situations.
+void MNU_CheckForMenus(void);
+void MNU_CheckForMenusAnyKey(void);
+void MNU_MeasureString(const char *string, short *w, short *h);
+void MNU_DrawString(short x, short y, const char *string, short shade, short pal);
+void MNU_MeasureSmallString(const char *string,short *w,short *h);
+void MNU_DrawSmallString(short x,short y,const char *string,short shade,short pal);
+void MNU_MeasureStringLarge(const char *string, short *w, short *h);
+void MNU_DrawStringLarge(short x, short y, const char *string);
 
-enum MenuIndex_t {
-    MENU_NULL           = INT32_MIN, // sentinel for "do nothing"
-    MENU_CLOSE          = -2, // sentinel for "close the menu"/"no menu"
-    MENU_PREVIOUS       = -1, // sentinel for "go to previous menu"
-    MENU_MAIN           = 0,
-    MENU_MAIN_INGAME    = 50,
-    MENU_EPISODE        = 100,
-    MENU_USERMAP        = 101,
-    MENU_NEWGAMECUSTOM  = 102,
-    MENU_NEWGAMECUSTOMSUB = 103,
-    MENU_NEWGAMECUSTOML3 = 104,
-    MENU_SKILL          = 110,
-    MENU_GAMESETUP      = 200,
-    MENU_OPTIONS        = 202,
-    MENU_VIDEOSETUP     = 203,
-    MENU_KEYBOARDSETUP  = 204,
-    MENU_MOUSESETUP     = 205,
-    MENU_JOYSTICKSETUP  = 206,
-    MENU_JOYSTICKBTNS   = 207,
-    MENU_JOYSTICKAXES   = 208,
-    MENU_KEYBOARDKEYS   = 209,
-    MENU_MOUSEBTNS      = 210,
-    MENU_JOYSTICKADV    = 212,
-    MENU_JOYSTICKAXIS   = 213,
-    MENU_TOUCHSETUP     = 214,
-    MENU_TOUCHSENS      = 215,
-    MENU_TOUCHBUTTONS   = 216,
-    MENU_CONTROLS       = 220,
-    MENU_RENDERER       = 230,
-    MENU_COLCORR        = 231,
-    MENU_COLCORR_INGAME = 232,
-    MENU_SCREENSETUP    = 233,
-    MENU_DISPLAYSETUP   = 234,
-    MENU_POLYMER        = 240,
-    MENU_LOAD           = 300,
-    MENU_SAVE           = 350,
-    MENU_STORY          = 400,
-    MENU_F1HELP         = 401,
-    MENU_QUIT           = 500,
-    MENU_QUITTOTITLE    = 501,
-    MENU_QUIT_INGAME    = 502,
-    MENU_NETSETUP       = 600,
-    MENU_NETWAITMASTER  = 601,
-    MENU_NETWAITVOTES   = 603,
-    MENU_SOUND          = 700,
-    MENU_SOUND_INGAME   = 701,
-    MENU_SOUND_DEVSETUP = 702,
-    MENU_SOUND_SF2      = 703,
-    MENU_SAVESETUP      = 750,
-    MENU_SAVECLEANVERIFY = 751,
-    MENU_RESETSTATSVERIFY = 752,
-    MENU_CHEATS         = 800,
-    MENU_CHEATENTRY     = 801,
-    MENU_CHEAT_WARP     = 802,
-    MENU_CHEAT_SKILL    = 803,
-    MENU_CREDITS        = 990,
-    MENU_CREDITS2       = 991,
-    MENU_CREDITS3       = 992,
-    MENU_CREDITS4       = 993,
-    MENU_CREDITS5       = 994,
-    MENU_LOADVERIFY     = 1000,
-    MENU_LOADDELVERIFY  = 1100,
-    MENU_NEWVERIFY      = 1500,
-    MENU_SAVEVERIFY     = 2000,
-    MENU_SAVEDELVERIFY  = 2100,
-    MENU_COLCORRRESETVERIFY = 2200,
-    MENU_KEYSRESETVERIFY = 2201,
-    MENU_KEYSCLASSICVERIFY = 2202,
-    MENU_JOYDEFAULTVERIFY = 2203,
-    MENU_KEYOVERRIDEVERIFY = 2204,
-    MENU_ADULTPASSWORD  = 10001,
-    MENU_RESETPLAYER    = 15000,
-    MENU_BUYDUKE        = 20000,
-    MENU_NETWORK        = 20001,
-    MENU_PLAYER         = 20002,
-    MENU_MACROS         = 20004,
-    MENU_NETHOST        = 20010,
-    MENU_NETOPTIONS     = 20011,
-    MENU_NETUSERMAP     = 20012,
-    MENU_NETJOIN        = 20020,
+// Functions from my other engine
+//void Get_Palette (unsigned char *pal);
+//void Set_Palette(unsigned char *buff);
+//void Fade_Timer(int clicks);
+void FadeIn(unsigned char targetcolor, unsigned int clicks);
+void FadeOut(unsigned char targetcolor, unsigned int clicks);
+void ResetPalette(PLAYERp pp);
+
+void ExitMenus(void);
+void ResetMenuInput(void);
+
+extern SWBOOL BorderAdjust;
+extern SWBOOL MultiPlayQuitFlag;
+
+// Make memcpy an intrinsic function for an easy frame rate boost
+//#pragma intrinsic( memcpy );
+
+// L O C A L   V A R I A B L E S ////////////////////////////////////////////////////////////////
+
+// Default menu pic brightness
+#define m_defshade      2
+
+#define FLASHTIME       60      // One second per icon flash
+
+// Defines for permanentwritesprite clipping box
+#define M_CX1   0
+#define M_CY1   0
+#define M_CX2   319
+#define M_CY2   199
+
+#define MZ              65536
+
+#define asc_Esc         27
+#define asc_Enter       13
+#define asc_Space       32
+
+
+#define pic_none 0
+#define pic_radiobuttn1 2816
+#define pic_radiobuttn2 2817
+#define pic_newgame 2819
+#define pic_load 2820
+#define pic_save 2821
+#define pic_options 2822
+#define pic_orderinfo 2823
+#define pic_todemo 2824
+#define pic_togame 2825
+#define pic_quit 2826
+#define pic_newgametitl 2827
+#define pic_training 2828
+#define pic_easy 2829
+#define pic_normal 2830
+#define pic_hard 2831
+#define pic_impossible 2832
+#define pic_optionstitl 2833
+#define pic_endgame 2834
+#define pic_detail 2835
+#define pic_high 2836
+#define pic_low 2837
+#define pic_mousesense 2838
+#define pic_soundvol 2839
+#define pic_toggles 2845
+#define pic_togglestitl 2844
+#define pic_mousenable 2840
+#define pic_joyenable 2841
+#define pic_bobbing 2842
+#define pic_slidelend 2846
+#define pic_slidebar 2847
+#define pic_sliderend 2848
+#define pic_sliderknob 2849
+#define pic_shuriken1 2850
+#define pic_yinyang 2870
+#define pic_soundtitl 2870
+#define pic_sndfxvol 2871
+#define pic_musicvol 2872
+#define pic_episode1 2873
+#define pic_episode2 2874
+#define pic_episode3 2875
+#define pic_modem 2876
+#define pic_scrsize 2877
+#define pic_loadsavecursor 2918
+#define pic_loadgame 2915
+#define pic_savegame 2916
+#define pic_loading 2917
+#define pic_loadsavescreen 2919
+#define pic_loadsavescreenbak 2922
+#define pic_savedescr 2924
+#define pic_shadow_warrior 2366
+
+// This is the current values set with all slider bar functions
+#define SENSE_DEFAULT   10  // Default mouse sensitivity ** should be 5!!!
+#define FXVOL_DEFAULT   8   // Default sound fx volume
+#define MUSIC_DEFAULT   8   // Default music volume
+#define SCRSIZE_DEFAULT 9   // Default screen size, max is 10
+#define BRIGHTNESS_DEFAULT 0 // Default is no gamma-correction
+#define BORDERTILE_DEFAULT 0 // Default is no gamma-correction
+#define GAMETYPE_DEFAULT 0  // Regular DeathMatch
+#define NETLEVEL_DEFAULT 0  // Default is level 1 (0)
+#define MONSTERS_DEFAULT 0  // No Monsters
+#define KILLLIMIT_DEFAULT 0 // No kill limit
+#define TIMELIMIT_DEFAULT 0 // None
+#define PLAYERCOLOR_DEFAULT 0
+
+typedef enum
+{
+    sldr_none,
+    sldr_mouse, sldr_sndfxvolume, sldr_musicvolume, sldr_scrsize, sldr_brightness,
+    sldr_bordertile, sldr_gametype, sldr_netlevel, sldr_monsters, sldr_killlimit,
+    sldr_timelimit, sldr_playercolor, sldr_videores, sldr_videobpp,
+    sldr_fov,
+    sldr_mousescalex, sldr_mousescaley,
+    sldr_joyaxisscale, sldr_joyaxisanalog, sldr_joyaxisdead, sldr_joyaxissatur,
+    sldr_max
+} SLDRType;
+
+
+#define MAX_SLDR_WIDTH  16  // maximum size of slider before x is compressed
+
+#define SLDR_MOUSESENSEMAX              20
+#define SLDR_SNDFXVOLMAX                16
+#define SLDR_MUSICVOLMAX                16
+#define SLDR_SCRSIZEMAX                 14
+#define SLDR_BRIGHTNESSMAX              8
+#define SLDR_BORDERTILEMAX              (SW_SHAREWARE ? 21 : 38) // counted from border.c
+#define SLDR_GAMETYPEMAX                3
+
+#define SLDR_NETLEVELMAX_REG             28
+#define SLDR_NETLEVELMAX_SW              4
+#define SLDR_NETLEVELMAX                (SW_SHAREWARE ? SLDR_NETLEVELMAX_SW : SLDR_NETLEVELMAX_REG)
+
+#define SLDR_MONSTERSMAX                5   // Skill Levels
+#define SLDR_KILLLIMITMAX               11  // Increments of 10 up to 100, 1 is no limit
+#define SLDR_TIMELIMITMAX               9
+#define SLDR_PLAYERCOLORMAX             8   // Up to 8 players different colors
+
+
+#define MOUSE_SENS_MAX_VALUE (1<<16)
+#define MUSIC_VOL_MAX_VALUE 255
+#define FX_VOL_MAX_VALUE 255
+
+// These are all the toggle button settings
+typedef enum
+{
+    btn_none, btn_auto_run, btn_crosshair, btn_auto_aim,
+    btn_mouse_aim, btn_messages, btn_mouse_invert, btn_bobbing, btn_shadows,
+    btn_sound, btn_music, btn_talking, btn_ambience, btn_flipstereo,
+    btn_res0, btn_res1, btn_res2, btn_res3, btn_res4, btn_res5, btn_res6,
+    btn_markers, btn_teamplay, btn_friendlyfire,btn_parental,btn_nuke,
+    btn_voxels, btn_stats, btn_playcd,
+    btn_videofs,
+    btn_darts,
+    btn_autoswitch,
+    btn_interpolate_so,
+    btn_max
+} BTNType;
+
+enum
+{
+    mf_normal = BIT(0),
+    mf_pushed = BIT(1),
+    mf_selected = BIT(2),
+    mf_disabled = BIT(3),
+    mf_separated = BIT(4)
 };
+typedef int MenuFlags;
 
+#define MenuSelectFlags (mf_pushed | mf_selected | mf_disabled)
+#define MenuDrawFlags (ROTATE_SPRITE_SCREEN_CLIP)
 
-
-typedef int32_t MenuID_t;
-
-
-typedef enum MenuAnimationType_t
-{ // Note: This enum is for logical categories, not visual types.
-    MA_None,
-    MA_Return,
-    MA_Advance,
-} MenuAnimationType_t;
-
-// a subset of screentext parameters, restricted because menus require accessibility
-typedef struct MenuFont_t
+typedef enum
 {
-//    int32_t xspace, yline;
-    vec2_t emptychar, between;
-    int32_t ypadding;
-    int32_t zoom;
-    int32_t cursorLeftPosition, cursorCenterPosition, cursorScale;
-    int32_t textflags;
-    int16_t tilenum;
-    // selected shade glows, deselected shade is used by Blood, disabled shade is used by SW
-    int8_t shade_deselected, shade_disabled;
-    uint8_t pal;
-    uint8_t pal_selected, pal_deselected, pal_disabled;
-    uint8_t pal_selected_right, pal_deselected_right, pal_disabled_right;
+    mt_none,
+    mt_inert, mt_slider, mt_button, mt_option, mt_layer
+} MenuTag;
 
-    int32_t get_yline() const { return mulscale16(emptychar.y + ypadding, zoom); }
-    int32_t get_yoffset() const { return mulscale16(ypadding, zoom); }
-} MenuFont_t;
-
-
-
-typedef enum MenuEntryType_t
+typedef enum
 {
-    Dummy,
-    Link,
-    Option,
-    Custom2Col,
-    RangeInt32,
-    RangeFloat,
-#ifdef MENU_ENABLE_RANGEDOUBLE
-    RangeDouble,
-#endif
-    String,
-    Spacer,
-} MenuEntryType_t;
+    uc_setup, uc_draw, uc_touchup, uc_hit
+} UserCall;
 
-typedef struct MenuEntryFormat_t
+struct MenuGroup;
+
+typedef struct MENU_ITEM
 {
-    int32_t marginBottom;
-    int32_t indent;
-    int32_t width; // 0: center, >0: width of the label column (left-aligned options), <0: -width of everything (right-aligned)
-} MenuEntryFormat_t;
+    MenuTag type;                       // What kind of item is this on the
+    // menu?
+    MenuFlags flags;                    // Menu item flags
+    SLDRType slider;                    // Slider type, if any
+    BTNType button;                     // Button state, if any
+    unsigned char hotkey;               // First letter of item
+    const char *text;                   // Text appearing in item, if any.
+    MenuGroup *child;                        // Should be menugroup, used to spawn
+    // sub-groups from items.
+    int x, y;                          // x,y position on screen.
+    short pic;                        // Startpic to use
+    char shade;                         // Shade of pic
+    int tics;                          // Ticcount for item
+    SWBOOL(*custom)(void);               // Work function on item select
 
+    SWBOOL (*preprocess)(struct MENU_ITEM *);
+    SWBOOL (*postprocess)(struct MENU_ITEM *); // Can do things on items select
+} MenuItem, *MenuItem_p;
 
-typedef struct MenuMenuFormat_t
+typedef struct MenuGroup
 {
-    vec2_t pos;
-    int32_t bottomcutoff; // >0: the bottom edge of the menu before automatic scrolling kicks in, <0: -total height for vertical justification
-} MenuMenuFormat_t;
+    int x, y;                          // Menu x,y position on screen.
+    const char *text;
+    MenuItem_p items;                   // Array of menu items for this menu.
+    short titlepic;                   // Used to draw title on menu with.
+    short cursorpic;                  // Pic used for menu cursor, 1st in
+    // anim sequence if animated.
+    char shade;                         // Title pic shade
 
-typedef struct MenuLink_t
+    SWBOOL(*draw_custom)(UserCall, MenuItem *);       // Custom routine
+    SWBOOL(*move_custom)(UserCall, MenuItem *);       // Custom routine
+
+    short cursor;                       // This is the current menu item the
+    // cursor is resting on.
+} MenuGroup, *MenuGroup_p;
+
+// Custom Routine Prototypes ////////////////////////////////////////////////////////////////////
+
+SWBOOL MNU_QuitCustom(UserCall call, MenuItem *item);
+SWBOOL MNU_QuickLoadCustom(UserCall call, MenuItem *item);
+SWBOOL MNU_LoadSaveTouchupCustom(UserCall call, MenuItem *item);
+SWBOOL MNU_DoParentalPassword(UserCall call, MenuItem *item);
+SWBOOL MNU_OrderCustom(UserCall call, MenuItem *item);
+SWBOOL MNU_DoEpisodeSelect(UserCall call, MenuItem *item);
+
+SWBOOL MNU_MusicFxCheck(MenuItem_p item);
+SWBOOL MNU_MusicCheck(MenuItem_p item);
+SWBOOL MNU_FxCheck(MenuItem_p item);
+SWBOOL MNU_MouseCheck(MenuItem_p item);
+SWBOOL MNU_JoystickCheck(MenuItem_p item);
+SWBOOL MNU_BorderCheck(MenuItem_p item);
+SWBOOL MNU_ShareWareCheck(MenuItem_p item);
+SWBOOL MNU_MenuLevelCheck(MenuItem_p item);
+SWBOOL MNU_ShareWareMessage(MenuItem_p item);
+
+// Custom MenuItem Routines /////////////////////////////////////////////////////////////////////
+
+SWBOOL MNU_StartGame(void);
+SWBOOL MNU_StartNetGame(void);
+SWBOOL MNU_EpisodeCustom(void);
+SWBOOL MNU_GetDescripCustom(void);
+SWBOOL MNU_LoadGameCustom(void);
+SWBOOL MNU_SaveGameCustom(void);
+SWBOOL MNU_GetLoadCustom(void);
+SWBOOL MNU_GetSaveCustom(void);
+SWBOOL MNU_ParentalCustom(void);
+SWBOOL MNU_KeySetupCustom(UserCall call, MenuItem *item);
+SWBOOL MNU_LoadModernDefaults(void);
+SWBOOL MNU_LoadClassicDefaults(void);
+
+// Menu Definitions /////////////////////////////////////////////////////////////////////////////
+
+#define DefInert(key,text)          mt_inert,mf_normal,sldr_none,btn_none,key,text,NULL
+#define DefSlider(slider,key,text)  mt_slider,mf_normal,slider,btn_none,key,text,NULL
+#define DefOption(key,text)         mt_option,mf_normal,sldr_none,btn_none,key,text,NULL
+#define DefButton(button,key,text)  mt_button,mf_normal,sldr_none,button,key,text,NULL
+#define DefLayer(key,text,child)    mt_layer,mf_normal,sldr_none,btn_none,key,text,child
+
+#define DefDisabled(key,text,child)    mt_layer,mf_disabled,sldr_none,btn_none,key,text,child
+#define DefNone mt_none,(MenuFlags)0,(SLDRType)0,(BTNType)0,0,NULL,NULL,0,0,0,0,0,NULL,NULL,NULL
+
+#define OPT_XS 30
+#define OPT_YS 30
+#define OPT_XSIDE (OPT_XS + 120)
+#define OPT_YINC 10
+#define OPT_LINE(line) (OPT_YS + (OPT_YINC * (line)))
+
+typedef struct
 {
-    // traits
-    MenuID_t linkID;
-    MenuAnimationType_t animation;
-} MenuLink_t;
-typedef struct MenuOptionSet_t
-{
-    // traits
-    char const **optionNames;
-    int32_t *optionValues; // If NULL, the identity of currentOption is assumed.
-
-    // pop-up list appearance
-    MenuMenuFormat_t *menuFormat;
-    MenuEntryFormat_t *entryFormat;
-    MenuFont_t *font;
-
-    // traits
-    int32_t numOptions;
-
-    // pop-up list state
-    int32_t currentEntry;
-    int32_t scrollPos;
-
-    // appearance
-    uint8_t features; // bit 1 = disable left/right arrows, bit 2 = disable list, bit 4 = unsorted list
-
-    int32_t getMarginBottom() const { return mulscale16(entryFormat->marginBottom, font->zoom); }
-    int32_t getIndent() const { return mulscale16(entryFormat->indent, font->zoom); }
-} MenuOptionSet_t;
-typedef struct MenuOption_t
-{
-    // appearance
-    MenuFont_t *font;
-
-    // traits
-    MenuOptionSet_t *options; // so that common sets such as Yes/No, On/Off can be reused
-
-    // effect
-    int32_t *data;
-
-    // state
-    int32_t currentOption;
-} MenuOption_t;
-typedef struct MenuCustom2Col_t
-{
-    // effect
-    uint8_t *column[2];
-    char const **key;
-
-    // appearance
-    MenuFont_t *font;
-
-    // effect
-    size_t numvalid;
-
-    // appearance
-    int32_t columnWidth;
-
-    // state
-    int8_t screenOpen;
-
-    // decoupled link (e.g. gamefunc index)
-    int32_t linkIndex;
-} MenuCustom2Col_t;
-
-enum MenuRangeFlags_t
-{
-    DisplayTypeInteger = 1,
-    DisplayTypePercent = 2,
-    DisplayTypeNormalizedDecimal = 3,
-    DisplayTypeMask = (1<<0)|(1<<1),
-
-    EnforceIntervals = 1<<7,
-};
-typedef struct MenuRangeInt32_t
-{
-    // effect
-    int32_t *variable;
-
-    // appearance
-    MenuFont_t *font;
-
-    // traits
-    int32_t min;
-    int32_t max;
-    int32_t onehundredpercent; // 0 implies max
-    int32_t steps;
-
-    uint8_t flags;
-} MenuRangeInt32_t;
-typedef struct MenuRangeFloat_t
-{
-    // effect
-    float *variable;
-
-    // appearance
-    MenuFont_t *font;
-
-    // traits
-    float min;
-    float max;
-    float onehundredpercent; // 0 implies 1.0
-    int32_t steps;
-
-    uint8_t flags;
-} MenuRangeFloat_t;
-#ifdef MENU_ENABLE_RANGEDOUBLE
-typedef struct MenuRangeDouble_t
-{
-    // effect
-    double *variable;
-
-    // appearance
-    MenuFont_t *font;
-
-    // traits
-    double min;
-    double max;
-    double onehundredpercent; // 0 implies 1.0
-    int32_t steps;
-
-    uint8_t flags;
-} MenuRangeDouble_t;
-#endif
-typedef struct MenuString_t
-{
-    // state
-    char* editfield;
-
-    // effect
-    char* variable;
-
-    // appearance
-    MenuFont_t *font;
-
-    // effect
-    int32_t bufsize;
-    int32_t flags;
-} MenuString_t;
-typedef struct MenuSpacer_t
-{
-    int32_t height;
-} MenuSpacer_t;
-
-// For internal use only.
-enum MenuEntryFlags_t
-{
-    MEF_Disabled = 1<<0,
-    MEF_LookDisabled = 1<<1,
-    MEF_Hidden = 1<<2,
-};
-
-typedef struct MenuEntry_t
-{
-    // traits
-    const char *name;
-
-    // appearance
-    MenuFont_t *font;
-    MenuEntryFormat_t *format;
-
-    void *entry;
-    MenuEntryType_t type;
-
-    // state
-    int32_t flags;
-    int32_t ytop, ybottom;
-
-    int32_t getMarginBottom() const { return mulscale16(format->marginBottom, font->zoom); }
-    int32_t getIndent() const { return mulscale16(format->indent, font->zoom); }
-    int32_t getHeight() const
-    {
-        return type == Spacer ? mulscale16(((MenuSpacer_t *)entry)->height, font->zoom) : font->get_yline();
-    }
-} MenuEntry_t;
-
-
-typedef enum MenuType_t
-{
-    Menu,
-    Panel,
-    Verify,
-    Message,
-    TextForm,
-    FileSelect,
-    List,
-} MenuType_t;
-
-typedef struct MenuMenu_t
-{
-    const char *title;
-
-    MenuMenuFormat_t *format;
-
-    MenuEntry_t **entrylist;
-    int32_t numEntries;
-
-    // state
-    int32_t currentEntry, currentColumn;
-    int32_t scrollPos;
-} MenuMenu_t;
-typedef struct MenuPanel_t
-{
-    const char *title;
-
-    MenuID_t previousID;
-    MenuAnimationType_t previousAnimation;
-    MenuID_t nextID;
-    MenuAnimationType_t nextAnimation;
-} MenuPanel_t;
-typedef struct MenuVerify_t
-{
-    vec2_t cursorpos;
-
-    MenuID_t linkID;
-    MenuAnimationType_t animation;
-} MenuVerify_t;
-typedef struct MenuMessage_t
-{
-    vec2_t cursorpos;
-
-    MenuID_t linkID;
-    MenuAnimationType_t animation;
-} MenuMessage_t;
-enum MenuTextFormFlags_t
-{
-    MTF_Password = 1<<0,
-};
-typedef struct MenuTextForm_t
-{
-    // state
-    char *input;
-
-    // traits
-    const char *instructions;
-    int32_t bufsize;
-    uint8_t flags;
-} MenuTextForm_t;
-typedef struct MenuFileSelect_t
-{
-    const char *title;
-
-    // appearance
-    MenuMenuFormat_t *format[2];
-    MenuFont_t *font[2];
-
-    // traits
-    const char * startdir;
-    const char *pattern;
-    char *destination;
-    char *lastdir;
-
-    // state
-    BUILDVFS_FIND_REC *findhigh[2];
-    int32_t scrollPos[2];
-
-    // appearance
-    int32_t marginBottom[2];
-
-    // state
-    fnlist_t fnlist;
-    int32_t currentList;
-
-    int32_t getMarginBottom(size_t index) const { return mulscale16(marginBottom[index], font[index]->zoom); }
-} MenuFileSelect_t;
-
-typedef struct Menu_t
-{
-    void *object;
-    MenuID_t menuID;
-    MenuID_t parentID;
-    MenuAnimationType_t parentAnimation;
-    MenuType_t type;
-} Menu_t;
-
-typedef struct MenuAnimation_t
-{
-    int32_t(*out)(struct MenuAnimation_t *);
-    int32_t(*in)(struct MenuAnimation_t *);
-
-    Menu_t *previous;
-    Menu_t *current;
-
-    uint32_t start;
-    int32_t length;
-} MenuAnimation_t;
-
-extern MenuAnimation_t m_animation;
-
-extern MenuID_t g_currentMenu;
-extern Menu_t *m_currentMenu;
-
-extern int32_t g_quitDeadline;
-extern int32_t voting;
-int Menu_Change(MenuID_t cm);
-void Menu_AnimateChange(int32_t cm, MenuAnimationType_t animtype);
-int32_t Menu_IsTextInput(Menu_t *cm);
-int G_CheckPlayerColor(int color);
-void Menu_Init(void);
-void Menu_Open(uint8_t playerID);
-void Menu_Close(uint8_t playerID);
-void M_DisplayMenus(void);
-
-extern MenuFont_t MF_Redfont, MF_Bluefont, MF_Minifont;
-
-#define M_MOUSETIMEOUT 210
-extern int32_t m_mouselastactivity;
-
-#if defined EDUKE32_TOUCH_DEVICES
-# define MOUSEALPHA 0
-# define CURSORALPHA (255/3)
-# define MOUSEACTIVECONDITIONAL(condition) (condition)
-# define MOUSEWATCHPOINTCONDITIONAL(condition) (condition)
-#else
-extern int32_t m_mousewake_watchpoint, m_menuchange_watchpoint;
-// alpha increments of 3 --> 255 / 3 = 85 --> round up to power of 2 --> 128 --> divide by 2 --> 64 alphatabs required
-// use 16 anyway :P
-# define MOUSEUSEALPHA (videoGetRenderMode() != REND_CLASSIC || numalphatabs >= 15)
-# define MOUSEALPHA (MOUSEUSEALPHA ? clamp(((int32_t) totalclock - m_mouselastactivity - 90)*3, 0, 255) : 0)
-# define CURSORALPHA (MOUSEUSEALPHA ? clamp(((int32_t) totalclock - m_mouselastactivity - 90)*2 + (255/3), (255/3), 255) : 255/3)
-# define MOUSEACTIVECONDITION (totalclock - m_mouselastactivity < M_MOUSETIMEOUT)
-# define MOUSEACTIVECONDITIONAL(condition) (MOUSEACTIVECONDITION && (condition))
-# define MOUSEINACTIVECONDITIONAL(condition) ((((g_player[myconnectindex].ps->gm & (MODE_MENU)) != MODE_MENU) || !MOUSEACTIVECONDITION) && (condition))
-# define MOUSEWATCHPOINTCONDITIONAL(condition) ((condition) || m_mousewake_watchpoint || m_menuchange_watchpoint == 3)
-#endif
-
-#define MAXMENUGAMEPLAYLAYERS 3
-#define MAXMENUGAMEPLAYENTRIES 7
-
-enum MenuGameplayEntryFlags
-{
-    MGE_Locked = 1u<<0u,
-    MGE_Hidden = 1u<<1u,
-    MGE_UserContent = 1u<<2u,
-};
-
-typedef struct MenuGameplayEntry
-{
-    char name[64];
-    uint8_t flags;
-    MenuGameplayEntry* subentries;
-
-    bool isValid() const { return name[0] != '\0'; }
-} MenuGameplayEntry;
-
-extern MenuGameplayEntry g_MenuGameplayEntries[MAXMENUGAMEPLAYENTRIES];
-
-extern MenuEntry_t ME_NEWGAMECUSTOMENTRIES[MAXMENUGAMEPLAYENTRIES];
-extern MenuEntry_t ME_NEWGAMECUSTOMSUBENTRIES[MAXMENUGAMEPLAYENTRIES][MAXMENUGAMEPLAYENTRIES];
-extern MenuEntry_t ME_NEWGAMECUSTOML3ENTRIES[MAXMENUGAMEPLAYENTRIES][MAXMENUGAMEPLAYENTRIES][MAXMENUGAMEPLAYENTRIES];
-
-#ifdef __cplusplus
-}
-#endif
+    int x,y;
+} VMODE;
 
 #endif

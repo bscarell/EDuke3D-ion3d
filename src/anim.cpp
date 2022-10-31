@@ -1,12 +1,13 @@
 //-------------------------------------------------------------------------
 /*
-Copyright (C) 2010 EDuke32 developers and contributors
+Copyright (C) 1997, 2005 - 3D Realms Entertainment
 
-This file is part of EDuke32.
+This file is part of Shadow Warrior version 1.2
 
-EDuke32 is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License version 2
-as published by the Free Software Foundation.
+Shadow Warrior is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,600 +18,364 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+Original Source: 1997 - Frank Maddin and Jim Norwood
+Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
+#include "build.h"
+#include "cache1d.h"
 
-#include "baselayer.h"
-#include "renderlayer.h"
-#include "duke3d.h"
+#include "keys.h"
+#include "mytypes.h"
+#include "fx_man.h"
+#include "music.h"
+#include "scriplib.h"
+#include "gamedefs.h"
+#include "keyboard.h"
+
+#include "control.h"
+#include "config.h"
+#include "sounds.h"
+#include "function.h"
+
+#include "game.h"
+#include "colormap.h"
+#include "network.h"
+
 #include "animlib.h"
-#include "mouse.h"
-#include "compat.h"
-#include "input.h"
-#include "texcache.h"
-
 #include "anim.h"
 
-#ifdef USE_LIBVPX
-# include "animvpx.h"
-#endif
+#include "common_game.h"
 
-#include "vfs.h"
+#define MAX_ANMS 10
+anim_t *anm_ptr[MAX_ANMS];
 
-// animsound_t.sound
-EDUKE32_STATIC_ASSERT(INT16_MAX >= MAXSOUNDS);
+int ANIMnumframes;
+unsigned char ANIMpal[3*256];
+unsigned char ANIMnum = 0;
+short SoundState;
 
-hashtable_t h_dukeanim = { 8, NULL };
-dukeanim_t * g_animPtr;
-
-dukeanim_t *Anim_Find(const char *s)
+const char *ANIMname[] =
 {
-    intptr_t ptr = hash_findcase(&h_dukeanim, s);
+    "sw.anm",
+    "swend.anm",
+    "sumocinm.anm",
+    "zfcin.anm",
+};
 
-    if (ptr == -1)
+#define ANIM_TILE(num) (MAXTILES-11 + (num))
+
+void AnimShareIntro(int frame, int numframes)
+{
+    int zero=0;
+
+    if (frame == numframes-1)
+        ototalclock += 120;
+    else if (frame == 1)
     {
-        int const siz = Bstrlen(s) + 5;
-        char * const str = (char *)Xcalloc(1, siz);
-
-        maybe_append_ext(str, siz, s, ".anm");
-        ptr = hash_findcase(&h_dukeanim, str);
-
-        if (ptr == -1)
-        {
-            maybe_append_ext(str, siz, s, ".ivf");
-            ptr = hash_findcase(&h_dukeanim, str);
-        }
-
-        Xfree(str);
+        PlaySound(DIGI_NOMESSWITHWANG,&zero,&zero,&zero,v3df_none);
+        ototalclock += 120*3;
     }
+    else
+        ototalclock += 8;
 
-    return (dukeanim_t *)(ptr == -1 ? NULL : (dukeanim_t *)ptr);
-}
-
-dukeanim_t * Anim_Create(char const * fn)
-{
-    dukeanim_t * anim = (dukeanim_t *)Xcalloc(1, sizeof(dukeanim_t));
-
-    hash_add(&h_dukeanim, fn, (intptr_t)anim, 0);
-
-    return anim;
-}
-
-#ifndef EDUKE32_STANDALONE
-#ifdef USE_DNAMES
-static int32_t const StopAllSounds = -1;
-#else
-# define StopAllSounds -1
-#endif
-#endif
-
-void Anim_Init(void)
-{
-    hash_init(&h_dukeanim);
-
-    struct defaultanmsound {
-#ifdef USE_DNAMES
-        int32_t const & sound;
-#else
-        int16_t sound;
-#endif
-        uint8_t frame;
-    };
-
-    static defaultanmsound const logo[] =
+    if (frame == 5)
     {
-        { FLY_BY, 1 },
-        { PIPEBOMB_EXPLODE, 19 },
-    };
-
-#ifndef EDUKE32_STANDALONE
-    static defaultanmsound const cineov2[] =
+        PlaySound(DIGI_INTRO_SLASH,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 15)
     {
-        { WIND_AMBIENCE, 1 },
-        { ENDSEQVOL2SND1, 26 },
-        { ENDSEQVOL2SND2, 36 },
-        { THUD, 54 },
-        { ENDSEQVOL2SND3, 62 },
-        { ENDSEQVOL2SND4, 75 },
-        { ENDSEQVOL2SND5, 81 },
-        { ENDSEQVOL2SND6, 115 },
-        { ENDSEQVOL2SND7, 124 },
-    };
-
-    static defaultanmsound const cineov3[] =
-    {
-        { WIND_REPEAT, 1 },
-        { DUKE_GRUNT, 98 },
-        { THUD, 82+20 },
-        { SQUISHED, 82+20 },
-        { ENDSEQVOL3SND3, 104+20 },
-        { ENDSEQVOL3SND2, 114+20 },
-        { PIPEBOMB_EXPLODE, 158 },
-    };
-
-    static defaultanmsound const vol42a[] =
-    {
-        { INTRO4_B, 1 },
-        { SHORT_CIRCUIT, 12 },
-        { INTRO4_5, 18 },
-        { SHORT_CIRCUIT, 34 },
-    };
-
-    static defaultanmsound const vol41a[] =
-    {
-        { INTRO4_1, 1 },
-        { INTRO4_3, 7 },
-        { INTRO4_2, 12 },
-        { INTRO4_4, 26 },
-    };
-
-    static defaultanmsound const vol43a[] =
-    {
-        { INTRO4_6, 10 },
-    };
-
-    static defaultanmsound const vol4e1[] =
-    {
-        { DUKE_UNDERWATER, 3 },
-        { VOL4ENDSND1, 35 },
-    };
-
-    static defaultanmsound const vol4e2[] =
-    {
-        { DUKE_UNDERWATER, 11 },
-        { VOL4ENDSND1, 20 },
-        { VOL4ENDSND2, 39 },
-        { StopAllSounds, 50 },
-    };
-
-    static defaultanmsound const vol4e3[] =
-    {
-        { BOSS4_DEADSPEECH, 1 },
-        { VOL4ENDSND1, 40 },
-        { DUKE_UNDERWATER, 40 },
-        { BIGBANG, 50 },
-    };
-#endif
-
-    struct defaultanm {
-        char const *fn;
-        defaultanmsound const *sounds;
-        uint8_t numsounds;
-        uint8_t fdelay;
-    };
-
-#define anmsnd(x) (x), ARRAY_SIZE(x)
-    static defaultanm const anms[] =
-    {
-        { "logo.anm", anmsnd(logo), 9 },
-        { "3dr.anm", NULL, 0, 10 },
-#ifndef EDUKE32_STANDALONE
-        { "vol4e1.anm", anmsnd(vol4e1), 10 },
-        { "vol4e2.anm", anmsnd(vol4e2), 14 },
-        { "vol4e3.anm", anmsnd(vol4e3), 10 },
-        { "vol41a.anm", anmsnd(vol41a), 14 },
-        { "vol42a.anm", anmsnd(vol42a), 18 },
-        { "vol43a.anm", anmsnd(vol43a), 10 },
-        { "duketeam.anm", NULL, 0, 10 },
-        { "radlogo.anm", anmsnd(cineov3), 10 },
-        { "cineov2.anm", anmsnd(cineov2), 18 },
-        { "cineov3.anm", anmsnd(cineov3), 10 },
-#endif
-    };
-#undef anmsnd
-
-    for (defaultanm const & anm : anms)
-    {
-        dukeanim_t * anim = Anim_Create(anm.fn);
-        anim->framedelay = anm.fdelay;
-
-        if (anm.numsounds)
-        {
-            anim->sounds = (animsound_t *)Xmalloc(anm.numsounds * sizeof(animsound_t));
-            int const numsounds = anm.numsounds;
-            for (int i = 0; i < numsounds; ++i)
-            {
-                defaultanmsound const & src = anm.sounds[i];
-                animsound_t & dst = anim->sounds[i];
-
-                dst.sound = src.sound;
-                dst.frame = src.frame;
-            }
-            anim->numsounds = numsounds;
-        }
-
-        anim->frameflags = 0;
+        PlaySound(DIGI_INTRO_WHIRL,&zero,&zero,&zero,v3df_none);
     }
 }
 
-int32_t Anim_Play(const char *fn)
+void AnimSerp(int frame, int numframes)
 {
-    dukeanim_t *anim = Anim_Find(fn);
+    int zero=0;
+    ototalclock += 16;
 
-    if (!anim)
+    if (frame == numframes-1)
+        ototalclock += 1*120;
+
+    if (frame == 1)
     {
-        LOG_F(ERROR, "Unable to play %s: undefined cutscene", fn);
-        return 0;
+        PlaySound(DIGI_SERPTAUNTWANG,&zero,&zero,&zero,v3df_none);
     }
-
-    uint16_t soundidx = 0;  // custom anim sounds
-    int32_t running = 1, i;
-
-    I_ClearAllInput();
-
-#ifdef USE_LIBVPX
-    uint16_t framenum = 0;
-    while (videoGetRenderMode() >= REND_POLYMOST)  // if, really
+    else if (frame == 16)
     {
-        char const * dot = Bstrrchr(fn, '.');
-        if (!dot)
-            break;
+        PlaySound(DIGI_SHAREND_TELEPORT,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 35)
+    {
+        SoundState++;
+        PlaySound(DIGI_WANGTAUNTSERP1,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 51)
+    {
+        SoundState++;
+        PlaySound(DIGI_SHAREND_UGLY1,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 64)
+    {
+        SoundState++;
+        PlaySound(DIGI_SHAREND_UGLY2,&zero,&zero,&zero,v3df_none);
+    }
+}
 
-        dukeanim_t const * origanim = anim;
-        buildvfs_kfd handle = buildvfs_kfd_invalid;
-        if (!Bstrcmp(dot, ".ivf"))
-        {
-            handle = kopen4loadfrommod(fn, 0);
-            if (handle == buildvfs_kfd_invalid)
-                break;
-        }
-        else
-        {
-            char vpxfn[BMAX_PATH];
-            Bstrncpyz(vpxfn, fn, BMAX_PATH);
+void AnimSumo(int frame, int numframes)
+{
+    int zero=0;
+    ototalclock += 10;
 
-            ptrdiff_t dotpos = dot - fn;
-            if (dotpos + 4 >= BMAX_PATH)
-                break;
+    if (frame == numframes-1)
+        ototalclock += 1*120;
 
-            char *vpxfndot = vpxfn + dotpos;
-            vpxfndot[1] = 'i';
-            vpxfndot[2] = 'v';
-            vpxfndot[3] = 'f';
-            vpxfndot[4] = '\0';
+    if (frame == 1)
+        ototalclock += 30;
 
-            handle = kopen4loadfrommod(vpxfn, 0);
-            if (handle == buildvfs_kfd_invalid)
-                break;
+    if (frame == 2)
+    {
+        // hungry
+        PlaySound(DIGI_JG41012,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 30)
+    {
+        PlaySound(DIGI_HOTHEADSWITCH,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 42)
+    {
+        PlaySound(DIGI_HOTHEADSWITCH,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 59)
+    {
+        PlaySound(DIGI_JG41028,&zero,&zero,&zero,v3df_none);
+    }
+}
 
-            anim = Anim_Find(vpxfn);
-        }
+void AnimZilla(int frame, int numframes)
+{
+    int zero=0;
+    ototalclock += 16;
 
-        animvpx_ivf_header_t info;
-        i = animvpx_read_ivf_header(handle, &info);
+    if (frame == numframes-1)
+        ototalclock += 1*120;
 
-        if (i)
-        {
-            LOG_F(ERROR, "Unable to play %s: %s", fn, animvpx_read_ivf_header_errmsg[i]);
-            kclose(handle);
-            return 0;
-        }
+    if (frame == 1)
+    {
+        PlaySound(DIGI_ZC1,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 5)
+    {
+        PlaySound(DIGI_JG94024,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 14)
+    {
+        PlaySound(DIGI_ZC2,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 30)
+    {
+        PlaySound(DIGI_ZC3,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 32)
+    {
+        PlaySound(DIGI_ZC4,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 37)
+    {
+        PlaySound(DIGI_ZC5,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 63)
+    {
+        PlaySound(DIGI_Z16043,&zero,&zero,&zero,v3df_none);
+        PlaySound(DIGI_ZC6,&zero,&zero,&zero,v3df_none);
+        PlaySound(DIGI_ZC7,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 72)
+    {
+        PlaySound(DIGI_ZC7,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 73)
+    {
+        PlaySound(DIGI_ZC4,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 77)
+    {
+        PlaySound(DIGI_ZC5,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 87)
+    {
+        PlaySound(DIGI_ZC8,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 103)
+    {
+        PlaySound(DIGI_ZC7,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 108)
+    {
+        PlaySound(DIGI_ZC9,&zero,&zero,&zero,v3df_none);
+    }
+    else if (frame == 120)
+    {
+        PlaySound(DIGI_JG94039,&zero,&zero,&zero,v3df_none);
+    }
+}
 
-        uint8_t fflags = anim ? anim->frameflags : origanim->frameflags;
+unsigned char *LoadAnm(short anim_num)
+{
+    int handle;
+    int length;
+    unsigned char *animbuf;
 
-        animvpx_codec_ctx codec;
+    DSPRINTF(ds,"LoadAnm");
+    MONO_PRINT(ds);
 
-        if (animvpx_init_codec(&info, handle, &codec))
-        {
-            LOG_F(ERROR, "Failed initializing VPX codec.");
-            animvpx_restore_glstate();
-            kclose(handle);
-            return 0;
-        }
+    // this seperate allows the anim to be precached easily
 
+    ANIMnum = anim_num;
 
-        uint32_t const convnumer = 120 * info.fpsdenom;
-        uint32_t const convdenom = info.fpsnumer * origanim->framedelay;
+    // lock it
+    walock[ANIM_TILE(ANIMnum)] = 219;
 
-        uint32_t const msecsperframe = scale(info.fpsdenom, 1000, info.fpsnumer);
-        uint32_t nextframetime = timerGetTicks();
-        uint8_t *pic;
+    if (anm_ptr[anim_num] == 0)
+    {
+        handle = kopen4load(ANIMname[ANIMnum], 0);
+        if (handle == -1)
+            return NULL;
+        length = kfilelength(handle);
 
-        //        OSD_Printf("msecs per frame: %d\n", msecsperframe);
+        g_cache.allocateBlock((intptr_t *) &anm_ptr[anim_num], length + sizeof(anim_t), &walock[ANIM_TILE(ANIMnum)]);
+        animbuf = (unsigned char *)((intptr_t)anm_ptr[anim_num] + sizeof(anim_t));
 
-        g_animPtr = anim;
-        do
-        {
-            nextframetime += msecsperframe;
-
-            animvpx_setup_glstate(fflags);
-            i = animvpx_nextpic(&codec, &pic);
-            if (i)
-            {
-                LOG_F(ERROR, "Failed getting next pic: %s", animvpx_nextpic_errmsg[i]);
-                if (codec.errmsg)
-                {
-                    LOG_F(ERROR, "  %s", codec.errmsg);
-                    if (codec.errmsg_detail)
-                        LOG_F(ERROR, "  detail: %s", codec.errmsg_detail);
-                }
-                break;
-            }
-
-            if (!pic)
-                break;  // no more pics!
-
-            VM_OnEventWithReturn(EVENT_PRECUTSCENE, g_player[screenpeek].ps->i, screenpeek, framenum);
-
-            videoClearScreen(0);
-
-            ototalclock = totalclock + 1; // pause game like ANMs
-
-            if (anim)
-            {
-                if (anim->frameaspect1 == 0 || anim->frameaspect2 == 0)
-                    animvpx_render_frame(&codec, 0);
-                else
-                    animvpx_render_frame(&codec, anim->frameaspect1 / anim->frameaspect2);
-            }
-            else
-            {
-                if (origanim->frameaspect1 == 0 || origanim->frameaspect2 == 0)
-                    animvpx_render_frame(&codec, 0);
-                else
-                    animvpx_render_frame(&codec, origanim->frameaspect1 / origanim->frameaspect2);
-            }
-
-            VM_OnEventWithReturn(EVENT_CUTSCENE, g_player[screenpeek].ps->i, screenpeek, framenum);
-
-            // after rendering the frame but before displaying: maybe play sound...
-            framenum++;
-            if (anim)
-            {
-                while (soundidx < anim->numsounds && anim->sounds[soundidx].frame <= framenum)
-                {
-                    int16_t sound = anim->sounds[soundidx].sound;
-                    if (sound == -1)
-                        FX_StopAllSounds();
-                    else
-                        S_PlaySound(sound);
-
-                    soundidx++;
-                }
-            }
-            else
-            {
-                uint16_t convframenum = scale(framenum, convnumer, convdenom);
-                while (soundidx < origanim->numsounds && origanim->sounds[soundidx].frame <= convframenum)
-                {
-                    int16_t sound = origanim->sounds[soundidx].sound;
-                    if (sound == -1)
-                        FX_StopAllSounds();
-                    else
-                        S_PlaySound(sound);
-
-                    soundidx++;
-                }
-            }
-
-            // this and showframe() instead of nextpage() are so that
-            // nobody tramples on our carefully set up GL state!
-            palfadedelta = 0;
-            videoShowFrame(-1);
-
-            //            I_ClearAllInput();
-
-            do
-            {
-                gameHandleEvents();
-
-                if (VM_OnEventWithReturn(EVENT_SKIPCUTSCENE, g_player[screenpeek].ps->i, screenpeek, I_GeneralTrigger()))
-                {
-                    running = 0;
-                    break;
-                }
-            } while (timerGetTicks() < nextframetime);
-        } while (running);
-        g_animPtr = NULL;
-
-        animvpx_print_stats(&codec);
-
-        //
+        kread(handle, animbuf, length);
         kclose(handle);
-        animvpx_restore_glstate();
-        animvpx_uninit_codec(&codec);
-
-        I_ClearAllInput();
-        return !running;  // done with playing VP8!
     }
-#endif
-// ANM playback --- v v v ---
-
-    buildvfs_kfd handle = kopen4load(fn, 0);
-
-    if (handle == buildvfs_kfd_invalid)
-        return 0;
-
-    int32_t length = kfilelength(handle);
-
-    if (length <= 4)
+    else
     {
-        LOG_F(WARNING, "Unable to play %s: no data.", fn);
-        goto end_anim;
+        animbuf = (unsigned char *)((intptr_t)anm_ptr[anim_num] + sizeof(anim_t));
     }
 
-    anim->animlock = CACHE1D_PERMANENT;
+    return animbuf;
+}
 
-    if (!anim->animbuf)
-        g_cache.allocateBlock((intptr_t *)&anim->animbuf, length + 1, &anim->animlock);
+void
+playanm(short anim_num)
+{
+    unsigned char *animbuf;
+    int i, length = 0, numframes = 0;
+    int32_t handle = -1;
+    UserInput uinfo = { FALSE, FALSE, FALSE, dir_None };
 
-    kread(handle, anim->animbuf, length);
+    ANIMnum = anim_num;
+
+    KB_FlushKeyboardQueue();
+    KB_ClearKeysDown();
+
+    DSPRINTF(ds,"PlayAnm");
+    MONO_PRINT(ds);
+
+    DSPRINTF(ds,"PlayAnm");
+    MONO_PRINT(ds);
+
+    animbuf = LoadAnm(anim_num);
+    if (!animbuf)
+        return;
+
+    // [JM] Temporary, needed to get the file's length for ANIM_LoadAnim. !CHECKME!
+    handle = kopen4load(ANIMname[ANIMnum], 0);
+    if (handle == -1) return;
+    length = kfilelength(handle);
     kclose(handle);
 
-    uint32_t firstfour;
-    Bmemcpy(&firstfour, anim->animbuf, 4);
+    DSPRINTF(ds,"PlayAnm - Palette Stuff");
+    MONO_PRINT(ds);
 
-    // "DKIF" (.ivf)
-    if (firstfour == B_LITTLE32(0x46494B44u))
-        goto end_anim;
+    ANIM_LoadAnim(animbuf, length);
+    ANIMnumframes = ANIM_NumFrames();
+    numframes = ANIMnumframes;
 
-    int32_t numframes;
+    tilesiz[ANIM_TILE(ANIMnum)].x = 200;
+    tilesiz[ANIM_TILE(ANIMnum)].y = 320;
 
-    // "LPF " (.anm)
-    if (firstfour != B_LITTLE32(0x2046504Cu) ||
-        ANIM_LoadAnim(anim->animbuf, length) < 0 ||
-        (numframes = ANIM_NumFrames()) <= 0)
-    {
-        // XXX: ANM_LoadAnim() still checks less than the bare minimum,
-        // e.g. ANM file could still be too small and not contain any frames.
-        LOG_F(ERROR, "Unable to play %s: malformed file.", fn);
-        goto end_anim;
-    }
+    videoClearViewableArea(0L);
 
     paletteSetColorTable(ANIMPAL, ANIM_GetPalette());
-
-    // setpalette(0L,256L,tempbuf);
-    // setbrightness(ud.brightness>>2,tempbuf,2);
-    P_SetGamePalette(g_player[myconnectindex].ps, ANIMPAL, 8 + 2);
-
-#ifdef USE_OPENGL
-    if (videoGetRenderMode() >= REND_POLYMOST)
+    videoSetPalette(gs.Brightness, ANIMPAL, 2);
+    if (ANIMnum == 1)
     {
-        if (!buildgl_samplerObjectsEnabled())
-        {
-            auto pth = texcache_fetch(TILE_ANIM, 0, 0, DAMETH_NOMASK);
-            if (pth && pth->glpic)
-            {
-                int filter = -1;
-
-                switch (anim->frameflags & CUTSCENE_FILTERMASK)
-                {
-                    case CUTSCENE_TEXTUREFILTER:
-                        break;
-                    case CUTSCENE_FORCEFILTER:
-                        filter = TEXFILTER_ON;
-                        break;
-                    case CUTSCENE_FORCENOFILTER:
-                        filter = TEXFILTER_OFF;
-                        break;
-                }
-
-                bind_2d_texture(pth->glpic, filter);
-            }
-        }
-        else
-        {
-            switch (anim->frameflags & CUTSCENE_FILTERMASK)
-            {
-                case CUTSCENE_TEXTUREFILTER:
-                    buildgl_bindSamplerObject(0, (glfiltermodes[gltexfiltermode].min == GL_NEAREST) ? PTH_INDEXED : PTH_FORCEFILTER);
-                    break;
-                case CUTSCENE_FORCEFILTER:
-                    buildgl_bindSamplerObject(0, PTH_FORCEFILTER);
-                    break;
-                case CUTSCENE_FORCENOFILTER:
-                    buildgl_bindSamplerObject(0, PTH_INDEXED);
-                    break;
-            }
-        }
-    }
-#endif
-
-    if (g_restorePalette == 1)
-    {
-        P_SetGamePalette(g_player[myconnectindex].ps, ANIMPAL, 0);
-        g_restorePalette = 0;
+        // draw the first frame
+        waloff[ANIM_TILE(ANIMnum)] = (intptr_t)ANIM_DrawFrame(1);
+        tileInvalidate(ANIM_TILE(ANIMnum), 0, 1<<4);
+        rotatesprite(0 << 16, 0 << 16, 65536L, 512, ANIM_TILE(ANIMnum), 0, 0, 2 + 4 + 8 + 16 + 64, 0, 0, xdim - 1, ydim - 1);
     }
 
-    gameHandleEvents();
-    ototalclock = totalclock;
+    SoundState = 0;
+    //ototalclock = totalclock + 120*2;
+    ototalclock = (int32_t) totalclock;
 
-    i = 1;
-    int32_t frametime; frametime = 0;
-
-    g_animPtr = anim;
-    do
+    for (i = 1; i < numframes; i++)
     {
-        if (i > 4 && totalclock > frametime + 60)
+        while (totalclock < ototalclock)
         {
-            LOG_F(WARNING, "Unable to maintain framerate playing %s, stopping playback to preserve dignity.", fn);
-            goto end_anim_restore_gl;
+            handleevents();
+            CONTROL_GetUserInput(&uinfo);
+            CONTROL_ClearUserInput(&uinfo);
+            switch (ANIMnum)
+            {
+            case ANIM_INTRO:
+                if (KB_KeyWaiting() || uinfo.button0 || uinfo.button1 || quitevent)
+                    goto ENDOFANIMLOOP;
+                break;
+            case ANIM_SERP:
+                if (KEY_PRESSED(KEYSC_ESC) || uinfo.button1 || quitevent)
+                    goto ENDOFANIMLOOP;
+                break;
+            }
+
+            getpackets();
         }
 
-        gameHandleEvents();
-
-        if (totalclock < ototalclock - 1)
-            continue;
-
-        i = VM_OnEventWithReturn(EVENT_PRECUTSCENE, g_player[screenpeek].ps->i, screenpeek, i);
-
-        walock[TILE_ANIM] = CACHE1D_PERMANENT;
-        waloff[TILE_ANIM] = (intptr_t)ANIM_DrawFrame(i);
-        tileSetSize(TILE_ANIM, 200, 320);
-        tileInvalidate(TILE_ANIM, 0, 1 << 4);  // JBF 20031228
-
-        if (VM_OnEventWithReturn(EVENT_SKIPCUTSCENE, g_player[screenpeek].ps->i, screenpeek, I_GeneralTrigger()))
+        switch (ANIMnum)
         {
-            running = 0;
-            goto end_anim_restore_gl;
+        case ANIM_INTRO:
+            AnimShareIntro(i,numframes);
+            break;
+        case ANIM_SERP:
+            AnimSerp(i,numframes);
+            break;
+        case ANIM_SUMO:
+            AnimSumo(i,numframes);
+            break;
+        case ANIM_ZILLA:
+            AnimZilla(i,numframes);
+            break;
         }
 
-        I_ClearAllInput();
+        videoClearViewableArea(0L);
 
-        if (g_restorePalette == 1)
-        {
-            P_SetGamePalette(g_player[myconnectindex].ps, ANIMPAL, 0);
-            g_restorePalette = 0;
-        }
+        waloff[ANIM_TILE(ANIMnum)] = (intptr_t)ANIM_DrawFrame(i);
+        tileInvalidate(ANIM_TILE(ANIMnum), 0, 1<<4);
 
-        m_mouselastactivity = frametime = (int32_t) totalclock;
-
-        videoClearScreen(0);
-
-        int32_t z;
-        if (anim->frameaspect1 > 0 && anim->frameaspect2 > 0 && ((anim->frameaspect1 / anim->frameaspect2) != (tilesiz[TILE_ANIM].y / (tilesiz[TILE_ANIM].x * 1.2))))
-        {
-            int32_t const oyxaspect = yxaspect;
-            if ((anim->frameaspect1 / anim->frameaspect2) >= ((decltype(anim->frameaspect1))xdim / ydim))
-                z = divscale16(320, tilesiz[TILE_ANIM].y);
-            else
-                z = divscale16(lrint(320 * ydim * anim->frameaspect1), lrint(tilesiz[TILE_ANIM].y * xdim * anim->frameaspect2));
-            int32_t aspect = divscale16(lrint(tilesiz[TILE_ANIM].y * anim->frameaspect2), lrint(tilesiz[TILE_ANIM].x * anim->frameaspect1));
-            renderSetAspect(viewingrange, aspect);
-            rotatesprite_fs(160<<16, 100<<16, z, 512, TILE_ANIM, 0, 0, 2|4|8|64|1024);
-            renderSetAspect(viewingrange, oyxaspect);
-        }
-        else
-        {
-            if ((tilesiz[TILE_ANIM].y / (tilesiz[TILE_ANIM].x * 1.2f)) > (1.f * xdim / ydim))
-                z = divscale16(320 * xdim * 3, tilesiz[TILE_ANIM].y * ydim * 4);
-            else
-                z = divscale16(200, tilesiz[TILE_ANIM].x);
-            rotatesprite_fs(160<<16, 100<<16, z, 512, TILE_ANIM, 0, 0, 2|4|8|64);
-        }
-
-        i = VM_OnEventWithReturn(EVENT_CUTSCENE, g_player[screenpeek].ps->i, screenpeek, i);
-
+        rotatesprite(0 << 16, 0 << 16, 65536L, 512, ANIM_TILE(ANIMnum), 0, 0, 2 + 4 + 8 + 16 + 64, 0, 0, xdim - 1, ydim - 1);
         videoNextPage();
+    }
 
-        ototalclock += anim->framedelay;
+    // pause on final frame
+    while (totalclock < ototalclock)
+    {
+        handleevents();
+        getpackets();
+    }
 
-        while (soundidx < anim->numsounds && anim->sounds[soundidx].frame <= (uint16_t)i)
-        {
-            int16_t sound = anim->sounds[soundidx].sound;
-            if (sound == -1)
-                FX_StopAllSounds();
-            else
-                S_PlaySound(sound);
+ENDOFANIMLOOP:
 
-            soundidx++;
-        }
+    videoClearViewableArea(0L);
+    videoNextPage();
 
-        ++i;
-    } while (i < numframes);
+    videoSetPalette(gs.Brightness, BASEPAL, 2);
 
-end_anim_restore_gl:
-end_anim:
-    g_animPtr = NULL;
-    I_ClearAllInput();
+    KB_FlushKeyboardQueue();
+    KB_ClearKeysDown();
     ANIM_FreeAnim();
-
-    tileSetSize(TILE_ANIM, 0, 0);
-    walock[TILE_ANIM] = 0;
-    waloff[TILE_ANIM] = 0;
-
-    // this is the lock for anim->animbuf
-    anim->animlock = CACHE1D_FREE;
-
-    return !running;
+    walock[ANIM_TILE(ANIMnum)] = 1;
 }

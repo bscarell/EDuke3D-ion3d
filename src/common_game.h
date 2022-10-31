@@ -1,178 +1,187 @@
+//-------------------------------------------------------------------------
+/*
+Copyright (C) 1997, 2005 - 3D Realms Entertainment
+
+This file is part of Shadow Warrior version 1.2
+
+Shadow Warrior is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+Original Source: 1997 - Frank Maddin and Jim Norwood
+Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
+*/
+//-------------------------------------------------------------------------
+
+//****************************************************************************
 //
-// Definitions of common game-only data structures/functions
-// (and declarations of data appearing in both)
-// for EDuke32 and Mapster32
+// common_game.h
 //
+// common defines for the setup program
+//
+//****************************************************************************
 
-#ifndef EDUKE32_COMMON_GAME_H_
-#define EDUKE32_COMMON_GAME_H_
-
-#include "build.h"
-
-#include "collections.h"
-#include "grpscan.h"
-
-#include "vfs.h"
-
+#ifndef common_public_
+#define common_public_
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+//****************************************************************************
+//
+// DEFINES
+//
+//****************************************************************************
+
+#define APPNAME "VoidSW"
+#ifndef APPBASENAME
+#define APPBASENAME         "voidsw"
+#endif
+
+//
+// Color Defines
+//
+
+#define MENUBACK_FOREGROUND COLOR_BLACK
+#define MENUBACK_BACKGROUND COLOR_DARKGRAY
+
+#define MENUBACKBORDER_FOREGROUND COLOR_BLACK
+#define MENUBACKBORDER_BACKGROUND COLOR_GRAY
+
+#define MENU_ACTIVE_FOREGROUND   COLOR_WHITE
+#define MENU_INACTIVE_FOREGROUND COLOR_GRAY
+#define MENU_DISPLAY_FOREGROUND  COLOR_LIGHTGREEN
+
+#define MENU_SECTIONHEADER_FOREGROUND   COLOR_YELLOW
+
+//
+// Setup program defines
+//
+
+#define SETUPPROGRAMNAME ("Shadow Warrior Setup")
+#define SETUPPROGRAMVERSION ("1.2")
+
+#define GAMENAME "Shadow Warrior"
+#define GAMELAUNCHER ("SW.EXE")
+#define GAMETOTYPE ("SW")
+
+#define MENUFOOTER "Esc Exits   Move  ды Selects\0"
+
+#define COMMITLAUNCHER ("COMMIT.EXE")
+#define COMMITFILENAME ("COMMIT.DAT")
+
+#define MAXVOICES 32
+#define SONGNAME ("Shadow Warrior Theme Song")
+//#define SOUNDSETUPLAUNCHER ("SNDSETUP.EXE")
+
+// Default Socket Number
+
+#define DEFAULTSOCKETNUMBER 0x8849
+
+// Default RTS file
+
+#define DEFAULTRTSFILE "sw.rts"
+
+// Default RTS path
+
+#define DEFAULTRTSPATH ".\\"
+
+// Default UserLevel path
+
+#define DEFAULTLEVELPATH ".\\"
+
+// Default External Control file
+
+#define DEFAULTCONTROLFILE "EXTERNAL.EXE"
+
+// Default Help file
+
+#define DEFAULTHELPFILE "SWHELP.EXE"
+
+// RTS extension
+
+#define RTSEXTENSION "RTS"
+
+// MAP extension
+
+#define MAPEXTENSION "MAP"
+
+// Default Player name
+
+#define DEFAULTPLAYERNAME "KATO"
+
+// Default Macros
+
+#define MACRO1  "Burn baby burn..."
+#define MACRO2  "You make another stupid move."
+#define MACRO3  "Blocking with your head again?"
+#define MACRO4  "You not fight well with hands!"
+#define MACRO5  "You so stupid!"
+#define MACRO6  "Quit jerking off. Come fight me!"
+#define MACRO7  "What the matter you scaredy cat?"
+#define MACRO8  "Did I break your concentration?"
+#define MACRO9  "Hope you were paying attention."
+#define MACRO10 "ITTAIIIUUU!!!"
+
+enum
+{
+    GAMEFLAG_SHAREWARE = 1u<<0u,
+    GAMEFLAG_SWWD = 1u<<1u,
+    GAMEFLAG_SWTD = 1u<<2u,
+};
+extern uint8_t SW_GameFlags;
+
+//#define SW_SHAREWARE 1     // This determines whether game is shareware compile or not!
+#define SW_SHAREWARE (SW_GameFlags & GAMEFLAG_SHAREWARE)
+
+extern struct grpfile const * g_selectedGrp;
+
 extern int g_useCwd;
 
-#ifndef APPNAME
-#define APPNAME             "EDuke32"
-#endif
+extern char *g_grpNamePtr;
 
-#ifndef APPBASENAME
-#define APPBASENAME         "eduke32"
-#endif
+const char *G_DefaultGrpFile(void);
+const char *G_GrpFile(void);
 
-#define GAMEFLAG_DUKE       0x00000001
-#define GAMEFLAG_NAM        0x00000002
-#define GAMEFLAG_NAPALM     0x00000004
-#define GAMEFLAG_WW2GI      0x00000008
-#define GAMEFLAG_ADDON      0x00000010
-#define GAMEFLAG_SHAREWARE  0x00000020
-#define GAMEFLAG_DUKEBETA   0x00000060 // includes 0x20 since it's a shareware beta
-#define GAMEFLAG_FURY       0x00000080
-#define GAMEFLAG_STANDALONE 0x00000100
-#define GAMEFLAGMASK        0x000000FF // flags allowed from grpinfo
+void clearGrpNamePtr(void);
 
-extern struct grpfile_t const *g_selectedGrp;
+void SW_InitMultiPsky(void);
 
-extern int32_t g_gameType;
-extern int     g_addonNum;
+void SW_ExtPreInit(int32_t argc, char const * const * argv);
+void SW_ExtInit(void);
 
-#define DUKE                (g_gameType & GAMEFLAG_DUKE)
-#define NAM                 (g_gameType & GAMEFLAG_NAM)
-#define NAPALM              (g_gameType & GAMEFLAG_NAPALM)
-#define WW2GI               (g_gameType & GAMEFLAG_WW2GI)
-#define NAM_WW2GI           (g_gameType & (GAMEFLAG_NAM|GAMEFLAG_WW2GI))
-#define SHAREWARE           (g_gameType & GAMEFLAG_SHAREWARE)
-#define DUKEBETA            ((g_gameType & GAMEFLAG_DUKEBETA) == GAMEFLAG_DUKEBETA)
-#define FURY                (g_gameType & GAMEFLAG_FURY)
+void SW_ScanGroups(void);
+void SW_LoadGroups(void);
 
-// statements using STANDALONE_EVAL(false, ...) are expected to be optimized away entirely in EDUKE32_STANDALONE builds
-#ifdef EDUKE32_STANDALONE
-# define STANDALONE_EVAL(x, y)  (x)
-# define STANDALONE_UNUSED(x)   UNUSED(x)
-#else
-# define STANDALONE_EVAL(x, y)  (y)
-# define STANDALONE_UNUSED(x)   x
-#endif
-
-enum Games_t {
-    GAME_DUKE = 0,
-    GAME_NAM,
-    GAME_NAPALM,
-    GAME_WW2GI,
-    GAMECOUNT
-};
+void SW_CleanupSearchPaths(void);
 
 enum searchpathtypes_t {
     SEARCHPATH_REMOVE = 1<<0,
-    SEARCHPATH_NAM    = 1<<1,
-    SEARCHPATH_WW2GI  = 1<<2,
-    SEARCHPATH_FURY   = 1<<3,
 };
+
+extern int g_addonNum;
 
 typedef enum basepal_ {
     BASEPAL = 0,
-    WATERPAL,
-    SLIMEPAL,
     DREALMSPAL,
     TITLEPAL,
-    ENDINGPAL,  // 5
+    TENPAL,
     ANIMPAL,
     BASEPALCOUNT
 } basepal_t;
 
-#define OSDTEXT_DEFAULT   "^00"
-#define OSDTEXT_DARKRED   "^10"
-#define OSDTEXT_GREEN     "^11"
-#define OSDTEXT_RED       "^21"
-#define OSDTEXT_YELLOW    "^23"
-
-#define OSDTEXT_BRIGHT    "^S0"
-
-#define OSD_ERROR OSDTEXT_DARKRED OSDTEXT_BRIGHT
-
-extern const char *g_gameNamePtr;
-
-extern char *g_grpNamePtr;
-extern char *g_scriptNamePtr;
-extern char *g_rtsNamePtr;
-
-extern const char *G_DefaultGrpFile(void);
-extern const char *G_GrpFile(void);
-
-extern const char *G_DefaultConFile(void);
-extern const char *G_ConFile(void);
-
-extern GrowArray<char *> g_scriptModules;
-
-extern void G_AddCon(const char *buffer);
-extern void G_AddConModule(const char *buffer);
-
-extern void clearGrpNamePtr(void);
-extern void clearScriptNamePtr(void);
-
-extern int loaddefinitions_game(const char *fn, int32_t preload);
-extern int32_t g_groupFileHandle;
-
-//////////
-
-extern void G_InitMultiPsky(int CLOUDYOCEAN__DYN, int MOONSKY1__DYN, int BIGORBIT1__DYN, int LA__DYN);
-extern void G_SetupGlobalPsky(void);
-
-//////////
-
-extern char g_modDir[BMAX_PATH];
-extern buildvfs_kfd kopen4loadfrommod(const char *filename, char searchfirst);
-extern void G_AddSearchPaths(void);
-extern void G_CleanupSearchPaths(void);
-
-extern void G_ExtPreInit(int32_t argc,char const * const * argv);
-extern void G_ExtInit(void);
-extern void G_ScanGroups(void);
-extern void G_LoadGroups(int32_t autoload);
-
-extern const char * G_GetInstallPath(int32_t insttype);
-
-//////////
-
-void G_LoadGroupsInDir(const char *dirname);
-void G_DoAutoload(const char *dirname);
-
-//////////
-
-extern void G_LoadLookups(void);
-
-//////////
-
-static inline void Duke_ApplySpritePropertiesToTSprite(tspriteptr_t tspr, uspriteptr_t spr)
-{
-    EDUKE32_STATIC_ASSERT(CSTAT_SPRITE_RESERVED1 >> 9 == TSPR_FLAGS_DRAW_LAST);
-    EDUKE32_STATIC_ASSERT(CSTAT_SPRITE_RESERVED4 >> 11 == TSPR_FLAGS_NO_SHADOW);
-    EDUKE32_STATIC_ASSERT(CSTAT_SPRITE_RESERVED5 >> 11 == TSPR_FLAGS_INVISIBLE_WITH_SHADOW);
-
-    auto const cstat = spr->cstat;
-    tspr->clipdist |= ((cstat & CSTAT_SPRITE_RESERVED1) >> 9) | ((cstat & (CSTAT_SPRITE_RESERVED4|CSTAT_SPRITE_RESERVED5)) >> 11);
-}
-
-void Duke_CommonCleanup(void);
-
-#if defined HAVE_FLAC || defined HAVE_VORBIS
-# define FORMAT_UPGRADE_ELIGIBLE
-extern int g_maybeUpgradeSoundFormats, g_maybeUpgradeMusic;
-extern buildvfs_kfd S_OpenAudio(const char *fn, char searchfirst, uint8_t ismusic);
-#else
-# define S_OpenAudio(fn, searchfirst, ismusic) kopen4loadfrommod(fn, searchfirst)
-#endif
-
 #ifdef __cplusplus
-}
+};
 #endif
-
 #endif

@@ -1,12 +1,13 @@
 //-------------------------------------------------------------------------
 /*
-Copyright (C) 2010 EDuke32 developers and contributors
+Copyright (C) 1997, 2005 - 3D Realms Entertainment
 
-This file is part of EDuke32.
+This file is part of Shadow Warrior version 1.2
 
-EDuke32 is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License version 2
-as published by the Free Software Foundation.
+Shadow Warrior is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,6 +18,9 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+Original Source: 1997 - Frank Maddin and Jim Norwood
+Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
 
@@ -28,95 +32,65 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 // axis defaults are also included
 
 
-#ifndef function_public_h_
-#define function_public_h_
-#ifdef __cplusplus
-extern "C" {
-#endif
+#ifndef function_public_
+#define function_public_
 
-#define MAXGAMEFUNCLEN 32
+extern const char *gamefunctions[];
 
-enum GameFunction_t
-   {
-   gamefunc_Move_Forward,
-   gamefunc_Move_Backward,
-   gamefunc_Turn_Left,
-   gamefunc_Turn_Right,
-   gamefunc_Strafe,
-   gamefunc_Fire,
-   gamefunc_Open,
-   gamefunc_Run,
-   gamefunc_Alt_Fire,
-   gamefunc_Jump,
-   gamefunc_Crouch,
-   gamefunc_Look_Up,
-   gamefunc_Look_Down,
-   gamefunc_Look_Left,
-   gamefunc_Look_Right,
-   gamefunc_Strafe_Left,
-   gamefunc_Strafe_Right,
-   gamefunc_Aim_Up,
-   gamefunc_Aim_Down,
-   gamefunc_Weapon_1,
-   gamefunc_Weapon_2,
-   gamefunc_Weapon_3,
-   gamefunc_Weapon_4,
-   gamefunc_Weapon_5,
-   gamefunc_Weapon_6,
-   gamefunc_Weapon_7,
-   gamefunc_Weapon_8,
-   gamefunc_Weapon_9,
-   gamefunc_Weapon_10,
-   gamefunc_Inventory,
-   gamefunc_Inventory_Left,
-   gamefunc_Inventory_Right,
-   gamefunc_Holo_Duke,
-   gamefunc_Jetpack,
-   gamefunc_NightVision,
-   gamefunc_MedKit,
-   gamefunc_TurnAround,
-   gamefunc_SendMessage,
-   gamefunc_Map,
-   gamefunc_Shrink_Screen,
-   gamefunc_Enlarge_Screen,
-   gamefunc_Center_View,
-   gamefunc_Holster_Weapon,
-   gamefunc_Show_Opponents_Weapon,
-   gamefunc_Map_Follow_Mode,
-   gamefunc_See_Coop_View,
-   gamefunc_Mouse_Aiming,
-   gamefunc_Toggle_Crosshair,
-   gamefunc_Steroids,
-   gamefunc_Quick_Kick,
-   gamefunc_Next_Weapon,
-   gamefunc_Previous_Weapon,
-   gamefunc_Show_Console,
-   gamefunc_Show_Scoreboard,
-   gamefunc_Dpad_Select,
-   gamefunc_Dpad_Aiming,
-   gamefunc_AutoRun,
-   gamefunc_Last_Weapon,
-   gamefunc_Quick_Save,
-   gamefunc_Quick_Load,
-   gamefunc_Alt_Weapon,
-   gamefunc_Third_Person_View,
-   gamefunc_Toggle_Crouch,
-   NUMGAMEFUNCTIONS
-   };
-
-EDUKE32_STATIC_ASSERT(NUMGAMEFUNCTIONS <= 64); // CONTROL_ButtonState and CONTROL_ButtonHeldState are uint64_t
-
-extern char gamefunctions[NUMGAMEFUNCTIONS][MAXGAMEFUNCLEN];
-extern const char gamefunc_symbol_names[NUMGAMEFUNCTIONS][MAXGAMEFUNCLEN];
-extern const char keydefaults[NUMGAMEFUNCTIONS*2][MAXGAMEFUNCLEN];
-extern const char oldkeydefaults[NUMGAMEFUNCTIONS*2][MAXGAMEFUNCLEN];
-
-// classic order is just integers ascending, hence omitted
-#define keybind_order_classic NULL
-extern const int32_t keybind_order_modern[NUMGAMEFUNCTIONS];
-extern int32_t keybind_order_custom[NUMGAMEFUNCTIONS];
-
-#ifdef __cplusplus
-}
-#endif
+enum
+{
+    gamefunc_Move_Forward,
+    gamefunc_Move_Backward,
+    gamefunc_Turn_Left,
+    gamefunc_Turn_Right,
+    gamefunc_Strafe,
+    gamefunc_Fire,
+    gamefunc_Open,
+    gamefunc_Run,
+    gamefunc_AutoRun,
+    gamefunc_Jump,
+    gamefunc_Crouch,
+    gamefunc_Look_Up,
+    gamefunc_Look_Down,
+    gamefunc_Strafe_Left,
+    gamefunc_Strafe_Right,
+    gamefunc_Aim_Up,
+    gamefunc_Aim_Down,
+    gamefunc_Weapon_1,
+    gamefunc_Weapon_2,
+    gamefunc_Weapon_3,
+    gamefunc_Weapon_4,
+    gamefunc_Weapon_5,
+    gamefunc_Weapon_6,
+    gamefunc_Weapon_7,
+    gamefunc_Weapon_8,
+    gamefunc_Weapon_9,
+    gamefunc_Weapon_10,
+    gamefunc_Inventory,
+    gamefunc_Inventory_Left,
+    gamefunc_Inventory_Right,
+    gamefunc_Med_Kit,
+    gamefunc_Smoke_Bomb,
+    gamefunc_Night_Vision,
+    gamefunc_Gas_Bomb,
+    gamefunc_Flash_Bomb,
+    gamefunc_Caltrops,
+    gamefunc_TurnAround,
+    gamefunc_SendMessage,
+    gamefunc_Map,
+    gamefunc_Shrink_Screen,
+    gamefunc_Enlarge_Screen,
+    gamefunc_Center_View,
+    gamefunc_Holster_Weapon,
+    gamefunc_Map_Follow_Mode,
+    gamefunc_See_Co_Op_View,
+    gamefunc_Mouse_Aiming,
+    gamefunc_Toggle_Crosshair,
+    gamefunc_Next_Weapon,
+    gamefunc_Previous_Weapon,
+    gamefunc_Show_Menu,
+    gamefunc_Show_Console,
+    gamefunc_Alt_Weapon_Mode,
+    NUMGAMEFUNCTIONS,
+};
 #endif

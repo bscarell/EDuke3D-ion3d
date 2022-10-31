@@ -1,12 +1,13 @@
 //-------------------------------------------------------------------------
 /*
-Copyright (C) 2010 EDuke32 developers and contributors
+Copyright (C) 1997, 2005 - 3D Realms Entertainment
 
-This file is part of EDuke32.
+This file is part of Shadow Warrior version 1.2
 
-EDuke32 is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License version 2
-as published by the Free Software Foundation.
+Shadow Warrior is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,6023 +18,8579 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+Original Source: 1997 - Frank Maddin and Jim Norwood
+Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 */
 //-------------------------------------------------------------------------
+#include "build.h"
+#include "common.h"
 
+#include "mytypes.h"
+#include "keys.h"
+#include "names2.h"
+#include "panel.h"
+#include "game.h"
+#include "tags.h"
+#include "player.h"
+#include "lists.h"
+#include "warp.h"
+#include "quake.h"
+#include "text.h"
+
+#include "common_game.h"
+#include "function.h"
+#include "control.h"
+#include "trigger.h"
+
+#include "savedef.h"
+#include "menus.h"
+#include "network.h"
+#include "pal.h"
 #include "demo.h"
-#include "duke3d.h"
-#include "enet.h"
-#include "input.h"
-#include "savegame.h"
+#include "mclip.h"
+#include "fx_man.h"
 
-#ifdef __ANDROID__
-#include "android.h"
+#include "sprite.h"
+#include "weapon.h"
+#include "ninja.h"
+#include "break.h"
+#include "jsector.h"
+#include "sector.h"
+#include "actor.h"
+#include "colormap.h"
+#include "music.h"
+#include "vis.h"
+#include "track.h"
+#include "interp.h"
+#include "interpso.h"
+
+
+#define SO_DRIVE_SOUND 2
+#define SO_IDLE_SOUND 1
+
+extern SWBOOL NoMeters;
+extern int Follow_posx,Follow_posy;
+
+#define TEST_UNDERWATER(pp) (TEST(sector[(pp)->cursectnum].extra, SECTFX_UNDERWATER))
+extern unsigned char palette_data[256][3];      // Global palette array
+
+//#define PLAYER_MIN_HEIGHT (Z(30))
+//#define PLAYER_MIN_HEIGHT_JUMP (Z(20))
+#define PLAYER_MIN_HEIGHT (Z(20))
+#define PLAYER_CRAWL_WADE_DEPTH (30)
+
+USER puser[MAX_SW_PLAYERS_REG];
+
+//int16_t gNet.MultiGameType = MULTI_GAME_NONE;
+SWBOOL NightVision = FALSE;
+extern SWBOOL FinishedLevel;
+
+//#define PLAYER_TURN_SCALE (8)
+#define PLAYER_TURN_SCALE (12)
+
+// the smaller the number the slower the going
+#define PLAYER_RUN_FRICTION (50000L)
+//#define PLAYER_RUN_FRICTION 0xcb00
+#define PLAYER_JUMP_FRICTION PLAYER_RUN_FRICTION
+#define PLAYER_FALL_FRICTION PLAYER_RUN_FRICTION
+
+#define PLAYER_WADE_FRICTION PLAYER_RUN_FRICTION
+#define PLAYER_FLY_FRICTION (55808L)
+
+#define PLAYER_CRAWL_FRICTION (45056L)
+#define PLAYER_SWIM_FRICTION (49152L)
+#define PLAYER_DIVE_FRICTION (49152L)
+
+// only for z direction climbing
+#define PLAYER_CLIMB_FRICTION (45056L)
+
+//#define BOAT_FRICTION 0xd000
+#define BOAT_FRICTION 0xcb00
+//#define TANK_FRICTION 0xcb00
+#define TANK_FRICTION (53248L)
+#define PLAYER_SLIDE_FRICTION (53248L)
+
+#define PLAYER_RUN_LOCK(pp)                                 \
+    if (TEST_SYNC_KEY((pp), SK_RUN_LOCK))               \
+    {                                               \
+        if (FLAG_KEY_PRESSED((pp), SK_RUN_LOCK))        \
+        {                                           \
+            FLAG_KEY_RELEASE((pp), SK_RUN_LOCK);        \
+            FLIP((pp)->Flags, PF_LOCK_RUN);             \
+            gs.AutoRun = !!TEST((pp)->Flags, PF_LOCK_RUN); \
+            sprintf(ds, "Run mode %s", TEST((pp)->Flags, PF_LOCK_RUN) ? "ON" : "OFF"); \
+            PutStringInfo((pp), ds);                    \
+        }                                           \
+    }                                               \
+    else                                                \
+        FLAG_KEY_RESET((pp), SK_RUN_LOCK)               \
+
+#define JUMP_STUFF 4
+
+// just like 2 except can jump higher - less gravity
+// goes better with slightly slower run speed than I had it at
+#if JUMP_STUFF == 4
+#define PLAYER_JUMP_GRAV 24
+#define PLAYER_JUMP_AMT (-650)
+#define PLAYER_CLIMB_JUMP_AMT (-1100)
+#define MAX_JUMP_DURATION 12
+char PlayerGravity = PLAYER_JUMP_GRAV;
 #endif
 
-int32_t lastvisinc;
-hudweapon_t hudweap;
+extern SWBOOL DebugOperate;
 
-#ifdef SPLITSCREEN_MOD_HACKS
-static int32_t g_snum;
-#endif
+//unsigned char synctics, lastsynctics;
 
-extern int32_t g_levelTextTime, ticrandomseed;
+int dimensionmode, zoom;
 
-int32_t g_numObituaries = 0;
-int32_t g_numSelfObituaries = 0;
+PLAYER Player[MAX_SW_PLAYERS_REG + 1];
 
+//short snum = 0;
 
-int const icon_to_inv[ICON_MAX] = { GET_FIRSTAID, GET_FIRSTAID, GET_STEROIDS, GET_HOLODUKE,
-                                    GET_JETPACK,  GET_HEATS,    GET_SCUBA,    GET_BOOTS };
+// These are a bunch of kens variables for the player
 
-int const inv_to_icon[GET_MAX] = { ICON_STEROIDS, ICON_NONE,  ICON_SCUBA, ICON_HOLODUKE, ICON_JETPACK, ICON_NONE,
-                                   ICON_NONE,     ICON_HEATS, ICON_NONE,  ICON_FIRSTAID, ICON_BOOTS };
+short NormalVisibility;
 
-void P_AddKills(DukePlayer_t * const pPlayer, uint16_t kills)
+int InitBloodSpray(int16_t SpriteNum, SWBOOL dogib, short velocity);
+
+SPRITEp FindNearSprite(SPRITEp sp, short stat);
+SWBOOL PlayerOnLadder(PLAYERp pp);
+void DoPlayerSlide(PLAYERp pp);
+void DoPlayerBeginSwim(PLAYERp pp);
+void DoPlayerSwim(PLAYERp pp);
+void DoPlayerWade(PLAYERp pp);
+void DoPlayerBeginWade(PLAYERp pp);
+void DoPlayerBeginCrawl(PLAYERp pp);
+void DoPlayerCrawl(PLAYERp pp);
+void DoPlayerRun(PLAYERp pp);
+void DoPlayerBeginRun(PLAYERp pp);
+void DoPlayerFall(PLAYERp pp);
+void DoPlayerBeginFall(PLAYERp pp);
+void DoPlayerJump(PLAYERp pp);
+void DoPlayerBeginJump(PLAYERp pp);
+void DoPlayerForceJump(PLAYERp pp);
+void DoPlayerBeginFly(PLAYERp pp);
+void DoPlayerFly(PLAYERp pp);
+void DoPlayerBeginClimb(PLAYERp pp);
+void DoPlayerClimb(PLAYERp pp);
+void DoPlayerBeginDie(PLAYERp pp);
+void DoPlayerDie(PLAYERp pp);
+void DoPlayerBeginOperateBoat(PLAYERp pp);
+void DoPlayerBeginOperateTank(PLAYERp pp);
+void DoPlayerBeginOperate(PLAYERp pp);
+void DoPlayerOperateBoat(PLAYERp pp);
+void DoPlayerOperateTank(PLAYERp pp);
+void DoPlayerOperateTurret(PLAYERp pp);
+void DoPlayerBeginDive(PLAYERp pp);
+void DoPlayerDive(PLAYERp pp);
+void DoPlayerTeleportPause(PLAYERp pp);
+SWBOOL PlayerFlyKey(void);
+void OperateSectorObject(SECTOR_OBJECTp sop, short newang, int newx, int newy);
+void CheckFootPrints(PLAYERp pp);
+SWBOOL DoPlayerTestCrawl(PLAYERp pp);
+void DoPlayerDeathFlip(PLAYERp pp);
+void DoPlayerDeathCrumble(PLAYERp pp);
+void DoPlayerDeathExplode(PLAYERp pp);
+void DoPlayerDeathFall(PLAYERp pp);
+
+void PlayerCheckValidMove(PLAYERp pp);
+void PlayerWarpUpdatePos(PLAYERp pp);
+void DoPlayerBeginDiveNoWarp(PLAYERp pp);
+int PlayerCanDiveNoWarp(PLAYERp pp);
+void DoPlayerCurrent(PLAYERp pp);
+int GetOverlapSector2(int x, int y, short *over, short *under);
+void PlayerToRemote(PLAYERp pp);
+void PlayerRemoteInit(PLAYERp pp);
+void PlayerSpawnPosition(PLAYERp pp);
+
+extern short target_ang;
+
+//////////////////////
+//
+// PLAYER SPECIFIC
+//
+//////////////////////
+
+#if 1
+#define PLAYER_NINJA_RATE 14
+
+int DoFootPrints(short SpriteNum);
+
+STATE s_PlayerNinjaRun[5][6] =
 {
-    pPlayer->actors_killed += kills;
+
+    {
+        {PLAYER_NINJA_RUN_R0 + 0, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[0][1]},
+        {PLAYER_NINJA_RUN_R0 + 1, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[0][2]},
+        {PLAYER_NINJA_RUN_R0 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[0][3]},
+        {PLAYER_NINJA_RUN_R0 + 2, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[0][4]},
+        {PLAYER_NINJA_RUN_R0 + 3, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[0][5]},
+        {PLAYER_NINJA_RUN_R0 + 3, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[0][0]},
+    },
+    {
+        {PLAYER_NINJA_RUN_R1 + 0, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[1][1]},
+        {PLAYER_NINJA_RUN_R1 + 1, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[1][2]},
+        {PLAYER_NINJA_RUN_R1 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[1][3]},
+        {PLAYER_NINJA_RUN_R1 + 2, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[1][4]},
+        {PLAYER_NINJA_RUN_R1 + 3, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[1][5]},
+        {PLAYER_NINJA_RUN_R1 + 3, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[1][0]},
+    },
+    {
+        {PLAYER_NINJA_RUN_R2 + 0, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[2][1]},
+        {PLAYER_NINJA_RUN_R2 + 1, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[2][2]},
+        {PLAYER_NINJA_RUN_R2 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[2][3]},
+        {PLAYER_NINJA_RUN_R2 + 2, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[2][4]},
+        {PLAYER_NINJA_RUN_R2 + 3, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[2][5]},
+        {PLAYER_NINJA_RUN_R2 + 3, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[2][0]},
+    },
+    {
+        {PLAYER_NINJA_RUN_R3 + 0, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[3][1]},
+        {PLAYER_NINJA_RUN_R3 + 1, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[3][2]},
+        {PLAYER_NINJA_RUN_R3 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[3][3]},
+        {PLAYER_NINJA_RUN_R3 + 2, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[3][4]},
+        {PLAYER_NINJA_RUN_R3 + 3, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[3][5]},
+        {PLAYER_NINJA_RUN_R3 + 3, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[3][0]},
+    },
+    {
+        {PLAYER_NINJA_RUN_R4 + 0, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[4][1]},
+        {PLAYER_NINJA_RUN_R4 + 1, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[4][2]},
+        {PLAYER_NINJA_RUN_R4 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[4][3]},
+        {PLAYER_NINJA_RUN_R4 + 2, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[4][4]},
+        {PLAYER_NINJA_RUN_R4 + 3, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[4][5]},
+        {PLAYER_NINJA_RUN_R4 + 3, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[4][0]},
+    },
+
+};
+
+STATEp sg_PlayerNinjaRun[] =
+{
+    s_PlayerNinjaRun[0],
+    s_PlayerNinjaRun[1],
+    s_PlayerNinjaRun[2],
+    s_PlayerNinjaRun[3],
+    s_PlayerNinjaRun[4]
+};
+#else
+#define PLAYER_NINJA_RATE 10
+
+STATE s_PlayerNinjaRun[5][8] =
+{
+
+    {
+        {PLAYER_NINJA_RUN_R0 + 0, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[0][1]},
+        {PLAYER_NINJA_RUN_R0 + 0, PLAYER_NINJA_RATE | SF_PLAYER_FUNC,DoFootPrints, &s_PlayerNinjaRun[0][2]},
+        {PLAYER_NINJA_RUN_R0 + 1, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[0][3]},
+        {PLAYER_NINJA_RUN_R0 + 2, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[0][4]},
+        {PLAYER_NINJA_RUN_R0 + 3, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[0][5]},
+        {PLAYER_NINJA_RUN_R0 + 4, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[0][6]},
+        {PLAYER_NINJA_RUN_R0 + 5, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[0][7]},
+        {PLAYER_NINJA_RUN_R0 + 5, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[0][0]},
+    },
+    {
+        {PLAYER_NINJA_RUN_R1 + 0, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[1][1]},
+        {PLAYER_NINJA_RUN_R1 + 0, PLAYER_NINJA_RATE | SF_PLAYER_FUNC,DoFootPrints, &s_PlayerNinjaRun[1][2]},
+        {PLAYER_NINJA_RUN_R1 + 1, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[1][3]},
+        {PLAYER_NINJA_RUN_R1 + 2, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[1][4]},
+        {PLAYER_NINJA_RUN_R1 + 3, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[1][5]},
+        {PLAYER_NINJA_RUN_R1 + 4, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[1][6]},
+        {PLAYER_NINJA_RUN_R1 + 5, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[1][7]},
+        {PLAYER_NINJA_RUN_R1 + 5, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[1][0]},
+    },
+    {
+        {PLAYER_NINJA_RUN_R2 + 0, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[2][1]},
+        {PLAYER_NINJA_RUN_R2 + 0, PLAYER_NINJA_RATE | SF_PLAYER_FUNC,DoFootPrints, &s_PlayerNinjaRun[2][2]},
+        {PLAYER_NINJA_RUN_R2 + 1, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[2][3]},
+        {PLAYER_NINJA_RUN_R2 + 2, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[2][4]},
+        {PLAYER_NINJA_RUN_R2 + 3, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[2][5]},
+        {PLAYER_NINJA_RUN_R2 + 4, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[2][6]},
+        {PLAYER_NINJA_RUN_R2 + 5, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[2][7]},
+        {PLAYER_NINJA_RUN_R2 + 5, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[2][0]},
+    },
+    {
+        {PLAYER_NINJA_RUN_R3 + 0, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[3][1]},
+        {PLAYER_NINJA_RUN_R3 + 0, PLAYER_NINJA_RATE | SF_PLAYER_FUNC,DoFootPrints, &s_PlayerNinjaRun[3][2]},
+        {PLAYER_NINJA_RUN_R3 + 1, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[3][3]},
+        {PLAYER_NINJA_RUN_R3 + 2, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[3][4]},
+        {PLAYER_NINJA_RUN_R3 + 3, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[3][5]},
+        {PLAYER_NINJA_RUN_R3 + 4, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[3][6]},
+        {PLAYER_NINJA_RUN_R3 + 5, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[3][7]},
+        {PLAYER_NINJA_RUN_R3 + 5, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[3][0]},
+    },
+    {
+        {PLAYER_NINJA_RUN_R4 + 0, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[4][1]},
+        {PLAYER_NINJA_RUN_R4 + 0, PLAYER_NINJA_RATE | SF_PLAYER_FUNC,DoFootPrints, &s_PlayerNinjaRun[4][2]},
+        {PLAYER_NINJA_RUN_R4 + 1, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[4][3]},
+        {PLAYER_NINJA_RUN_R4 + 2, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[4][4]},
+        {PLAYER_NINJA_RUN_R4 + 3, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[4][5]},
+        {PLAYER_NINJA_RUN_R4 + 4, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[4][6]},
+        {PLAYER_NINJA_RUN_R4 + 5, PLAYER_NINJA_RATE | SF_TIC_ADJUST, NullAnimator, &s_PlayerNinjaRun[4][7]},
+        {PLAYER_NINJA_RUN_R4 + 5, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaRun[4][0]},
+    }
+};
+
+STATEp sg_PlayerNinjaRun[] =
+{
+    s_PlayerNinjaRun[0],
+    s_PlayerNinjaRun[1],
+    s_PlayerNinjaRun[2],
+    s_PlayerNinjaRun[3],
+    s_PlayerNinjaRun[4]
+};
+#endif
+
+//////////////////////
+//
+// PLAYER_NINJA STAND
+//
+//////////////////////
+
+#define PLAYER_NINJA_STAND_RATE 10
+
+STATE s_PlayerNinjaStand[5][1] =
+{
+    {
+        {PLAYER_NINJA_STAND_R0 + 0, PLAYER_NINJA_STAND_RATE, NullAnimator, &s_PlayerNinjaStand[0][0]},
+    },
+    {
+        {PLAYER_NINJA_STAND_R1 + 0, PLAYER_NINJA_STAND_RATE, NullAnimator, &s_PlayerNinjaStand[1][0]},
+    },
+    {
+        {PLAYER_NINJA_STAND_R2 + 0, PLAYER_NINJA_STAND_RATE, NullAnimator, &s_PlayerNinjaStand[2][0]},
+    },
+    {
+        {PLAYER_NINJA_STAND_R3 + 0, PLAYER_NINJA_STAND_RATE, NullAnimator, &s_PlayerNinjaStand[3][0]},
+    },
+    {
+        {PLAYER_NINJA_STAND_R4 + 0, PLAYER_NINJA_STAND_RATE, NullAnimator, &s_PlayerNinjaStand[4][0]},
+    },
+};
+STATEp sg_PlayerNinjaStand[] =
+{
+    s_PlayerNinjaStand[0],
+    s_PlayerNinjaStand[1],
+    s_PlayerNinjaStand[2],
+    s_PlayerNinjaStand[3],
+    s_PlayerNinjaStand[4]
+};
+
+
+#define NINJA_STAR_RATE 12
+
+extern STATEp sg_NinjaRun[];
+int DoPlayerSpriteReset(short SpriteNum);
+
+#if 0
+STATE s_PlayerNinjaThrow[5][4] =
+{
+    {
+        {PLAYER_SHOOT_R0 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[0][1]},
+        {PLAYER_SHOOT_R0 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[0][2]},
+        {PLAYER_SHOOT_R0 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[0][3]},
+        {PLAYER_SHOOT_R0 + 0, NINJA_STAR_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaThrow[0][3]},
+    },
+    {
+        {PLAYER_SHOOT_R1 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[1][1]},
+        {PLAYER_SHOOT_R1 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[1][2]},
+        {PLAYER_SHOOT_R1 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[1][3]},
+        {PLAYER_SHOOT_R1 + 0, NINJA_STAR_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaThrow[0][3]},
+    },
+    {
+        {PLAYER_SHOOT_R2 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[2][1]},
+        {PLAYER_SHOOT_R2 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[2][2]},
+        {PLAYER_SHOOT_R2 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[2][3]},
+        {PLAYER_SHOOT_R2 + 0, NINJA_STAR_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaThrow[0][3]},
+    },
+    {
+        {PLAYER_SHOOT_R3 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[3][1]},
+        {PLAYER_SHOOT_R3 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[3][2]},
+        {PLAYER_SHOOT_R3 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[3][3]},
+        {PLAYER_SHOOT_R3 + 0, NINJA_STAR_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaThrow[0][3]},
+    },
+    {
+        {PLAYER_SHOOT_R4 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[4][1]},
+        {PLAYER_SHOOT_R4 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[4][2]},
+        {PLAYER_SHOOT_R4 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[4][3]},
+        {PLAYER_SHOOT_R4 + 0, NINJA_STAR_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaThrow[0][3]},
+    },
+};
+#endif
+
+#if 1
+STATE s_PlayerNinjaThrow[5][4] =
+{
+    {
+        {PLAYER_NINJA_SHOOT_R0 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[0][1]},
+        {PLAYER_NINJA_SHOOT_R0 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[0][2]},
+        {PLAYER_NINJA_SHOOT_R0 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[0][3]},
+        {PLAYER_NINJA_SHOOT_R0 + 0, NINJA_STAR_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaThrow[0][3]},
+    },
+    {
+        {PLAYER_NINJA_SHOOT_R1 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[1][1]},
+        {PLAYER_NINJA_SHOOT_R1 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[1][2]},
+        {PLAYER_NINJA_SHOOT_R1 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[1][3]},
+        {PLAYER_NINJA_SHOOT_R1 + 0, NINJA_STAR_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaThrow[0][3]},
+    },
+    {
+        {PLAYER_NINJA_SHOOT_R2 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[2][1]},
+        {PLAYER_NINJA_SHOOT_R2 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[2][2]},
+        {PLAYER_NINJA_SHOOT_R2 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[2][3]},
+        {PLAYER_NINJA_SHOOT_R2 + 0, NINJA_STAR_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaThrow[0][3]},
+    },
+    {
+        {PLAYER_NINJA_SHOOT_R3 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[3][1]},
+        {PLAYER_NINJA_SHOOT_R3 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[3][2]},
+        {PLAYER_NINJA_SHOOT_R3 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[3][3]},
+        {PLAYER_NINJA_SHOOT_R3 + 0, NINJA_STAR_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaThrow[0][3]},
+    },
+    {
+        {PLAYER_NINJA_SHOOT_R4 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[4][1]},
+        {PLAYER_NINJA_SHOOT_R4 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[4][2]},
+        {PLAYER_NINJA_SHOOT_R4 + 0, NINJA_STAR_RATE, NullAnimator, &s_PlayerNinjaThrow[4][3]},
+        {PLAYER_NINJA_SHOOT_R4 + 0, NINJA_STAR_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaThrow[0][3]},
+    },
+};
+#endif
+
+STATEp sg_PlayerNinjaThrow[] =
+{
+    s_PlayerNinjaThrow[0],
+    s_PlayerNinjaThrow[1],
+    s_PlayerNinjaThrow[2],
+    s_PlayerNinjaThrow[3],
+    s_PlayerNinjaThrow[4]
+};
+
+//////////////////////
+//
+// PLAYER_NINJA JUMP
+//
+//////////////////////
+
+#define PLAYER_NINJA_JUMP_RATE 24
+
+STATE s_PlayerNinjaJump[5][4] =
+{
+    {
+        {PLAYER_NINJA_JUMP_R0 + 0, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[0][1]},
+        {PLAYER_NINJA_JUMP_R0 + 1, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[0][2]},
+        {PLAYER_NINJA_JUMP_R0 + 2, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[0][3]},
+        {PLAYER_NINJA_JUMP_R0 + 3, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[0][3]},
+    },
+    {
+        {PLAYER_NINJA_JUMP_R1 + 0, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[1][1]},
+        {PLAYER_NINJA_JUMP_R1 + 1, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[1][2]},
+        {PLAYER_NINJA_JUMP_R1 + 2, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[1][3]},
+        {PLAYER_NINJA_JUMP_R1 + 3, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[1][3]},
+    },
+    {
+        {PLAYER_NINJA_JUMP_R2 + 0, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[2][1]},
+        {PLAYER_NINJA_JUMP_R2 + 1, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[2][2]},
+        {PLAYER_NINJA_JUMP_R2 + 2, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[2][3]},
+        {PLAYER_NINJA_JUMP_R2 + 3, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[2][3]},
+    },
+    {
+        {PLAYER_NINJA_JUMP_R3 + 0, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[3][1]},
+        {PLAYER_NINJA_JUMP_R3 + 1, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[3][2]},
+        {PLAYER_NINJA_JUMP_R3 + 2, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[3][3]},
+        {PLAYER_NINJA_JUMP_R3 + 3, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[3][3]},
+    },
+    {
+        {PLAYER_NINJA_JUMP_R4 + 0, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[4][1]},
+        {PLAYER_NINJA_JUMP_R4 + 1, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[4][2]},
+        {PLAYER_NINJA_JUMP_R4 + 2, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[4][3]},
+        {PLAYER_NINJA_JUMP_R4 + 3, PLAYER_NINJA_JUMP_RATE, NullAnimator, &s_PlayerNinjaJump[4][3]},
+    },
+};
+
+
+STATEp sg_PlayerNinjaJump[] =
+{
+    s_PlayerNinjaJump[0],
+    s_PlayerNinjaJump[1],
+    s_PlayerNinjaJump[2],
+    s_PlayerNinjaJump[3],
+    s_PlayerNinjaJump[4]
+};
+
+
+//////////////////////
+//
+// PLAYER_NINJA FALL
+//
+//////////////////////
+
+#define PLAYER_NINJA_FALL_RATE 16
+
+STATE s_PlayerNinjaFall[5][2] =
+{
+    {
+        {PLAYER_NINJA_JUMP_R0 + 1, PLAYER_NINJA_FALL_RATE, NullAnimator, &s_PlayerNinjaFall[0][1]},
+        {PLAYER_NINJA_JUMP_R0 + 2, PLAYER_NINJA_FALL_RATE, NullAnimator, &s_PlayerNinjaFall[0][1]},
+    },
+    {
+        {PLAYER_NINJA_JUMP_R1 + 1, PLAYER_NINJA_FALL_RATE, NullAnimator, &s_PlayerNinjaFall[1][1]},
+        {PLAYER_NINJA_JUMP_R1 + 2, PLAYER_NINJA_FALL_RATE, NullAnimator, &s_PlayerNinjaFall[1][1]},
+    },
+    {
+        {PLAYER_NINJA_JUMP_R2 + 1, PLAYER_NINJA_FALL_RATE, NullAnimator, &s_PlayerNinjaFall[2][1]},
+        {PLAYER_NINJA_JUMP_R2 + 2, PLAYER_NINJA_FALL_RATE, NullAnimator, &s_PlayerNinjaFall[2][1]},
+    },
+    {
+        {PLAYER_NINJA_JUMP_R3 + 1, PLAYER_NINJA_FALL_RATE, NullAnimator, &s_PlayerNinjaFall[3][1]},
+        {PLAYER_NINJA_JUMP_R3 + 2, PLAYER_NINJA_FALL_RATE, NullAnimator, &s_PlayerNinjaFall[3][1]},
+    },
+    {
+        {PLAYER_NINJA_JUMP_R4 + 1, PLAYER_NINJA_FALL_RATE, NullAnimator, &s_PlayerNinjaFall[4][1]},
+        {PLAYER_NINJA_JUMP_R4 + 2, PLAYER_NINJA_FALL_RATE, NullAnimator, &s_PlayerNinjaFall[4][1]},
+    },
+};
+
+
+STATEp sg_PlayerNinjaFall[] =
+{
+    s_PlayerNinjaFall[0],
+    s_PlayerNinjaFall[1],
+    s_PlayerNinjaFall[2],
+    s_PlayerNinjaFall[3],
+    s_PlayerNinjaFall[4]
+};
+
+//////////////////////
+//
+// PLAYER_NINJA CLIMB
+//
+//////////////////////
+
+
+#define PLAYER_NINJA_CLIMB_RATE 20
+STATE s_PlayerNinjaClimb[5][4] =
+{
+    {
+        {PLAYER_NINJA_CLIMB_R0 + 0, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[0][1]},
+        {PLAYER_NINJA_CLIMB_R0 + 1, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[0][2]},
+        {PLAYER_NINJA_CLIMB_R0 + 2, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[0][3]},
+        {PLAYER_NINJA_CLIMB_R0 + 3, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[0][0]},
+    },
+    {
+        {PLAYER_NINJA_CLIMB_R1 + 0, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[1][1]},
+        {PLAYER_NINJA_CLIMB_R1 + 1, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[1][2]},
+        {PLAYER_NINJA_CLIMB_R1 + 2, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[1][3]},
+        {PLAYER_NINJA_CLIMB_R1 + 3, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[1][0]},
+    },
+    {
+        {PLAYER_NINJA_CLIMB_R2 + 0, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[2][1]},
+        {PLAYER_NINJA_CLIMB_R2 + 1, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[2][2]},
+        {PLAYER_NINJA_CLIMB_R2 + 2, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[2][3]},
+        {PLAYER_NINJA_CLIMB_R2 + 3, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[2][0]},
+    },
+    {
+        {PLAYER_NINJA_CLIMB_R3 + 0, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[3][1]},
+        {PLAYER_NINJA_CLIMB_R3 + 1, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[3][2]},
+        {PLAYER_NINJA_CLIMB_R3 + 2, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[3][3]},
+        {PLAYER_NINJA_CLIMB_R3 + 3, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[3][0]},
+    },
+    {
+        {PLAYER_NINJA_CLIMB_R4 + 0, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[4][1]},
+        {PLAYER_NINJA_CLIMB_R4 + 1, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[4][2]},
+        {PLAYER_NINJA_CLIMB_R4 + 2, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[4][3]},
+        {PLAYER_NINJA_CLIMB_R4 + 3, PLAYER_NINJA_CLIMB_RATE, NullAnimator, &s_PlayerNinjaClimb[4][0]},
+    },
+};
+
+STATEp sg_PlayerNinjaClimb[] =
+{
+    s_PlayerNinjaClimb[0],
+    s_PlayerNinjaClimb[1],
+    s_PlayerNinjaClimb[2],
+    s_PlayerNinjaClimb[3],
+    s_PlayerNinjaClimb[4]
+};
+
+//////////////////////
+//
+// PLAYER_NINJA CRAWL
+//
+//////////////////////
+
+
+#define PLAYER_NINJA_CRAWL_RATE 14
+STATE s_PlayerNinjaCrawl[5][6] =
+{
+    {
+        {PLAYER_NINJA_CRAWL_R0 + 0, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[0][1]},
+        {PLAYER_NINJA_CRAWL_R0 + 1, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[0][2]},
+        {PLAYER_NINJA_CRAWL_R0 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaCrawl[0][3]},
+        {PLAYER_NINJA_CRAWL_R0 + 2, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[0][4]},
+        {PLAYER_NINJA_CRAWL_R0 + 1, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[0][5]},
+        {PLAYER_NINJA_CRAWL_R0 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaCrawl[0][0]},
+    },
+    {
+        {PLAYER_NINJA_CRAWL_R1 + 0, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[1][1]},
+        {PLAYER_NINJA_CRAWL_R1 + 1, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[1][2]},
+        {PLAYER_NINJA_CRAWL_R1 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaCrawl[1][3]},
+        {PLAYER_NINJA_CRAWL_R1 + 2, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[1][4]},
+        {PLAYER_NINJA_CRAWL_R1 + 1, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[1][5]},
+        {PLAYER_NINJA_CRAWL_R1 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaCrawl[1][0]},
+    },
+    {
+        {PLAYER_NINJA_CRAWL_R2 + 0, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[2][1]},
+        {PLAYER_NINJA_CRAWL_R2 + 1, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[2][2]},
+        {PLAYER_NINJA_CRAWL_R2 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaCrawl[2][3]},
+        {PLAYER_NINJA_CRAWL_R2 + 2, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[2][4]},
+        {PLAYER_NINJA_CRAWL_R2 + 1, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[2][5]},
+        {PLAYER_NINJA_CRAWL_R2 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaCrawl[2][0]},
+    },
+    {
+        {PLAYER_NINJA_CRAWL_R3 + 0, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[3][1]},
+        {PLAYER_NINJA_CRAWL_R3 + 1, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[3][2]},
+        {PLAYER_NINJA_CRAWL_R3 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaCrawl[3][3]},
+        {PLAYER_NINJA_CRAWL_R3 + 2, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[3][4]},
+        {PLAYER_NINJA_CRAWL_R3 + 1, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[3][5]},
+        {PLAYER_NINJA_CRAWL_R3 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaCrawl[3][0]},
+    },
+    {
+        {PLAYER_NINJA_CRAWL_R4 + 0, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[4][1]},
+        {PLAYER_NINJA_CRAWL_R4 + 1, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[4][2]},
+        {PLAYER_NINJA_CRAWL_R4 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaCrawl[4][3]},
+        {PLAYER_NINJA_CRAWL_R4 + 2, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[4][4]},
+        {PLAYER_NINJA_CRAWL_R4 + 1, PLAYER_NINJA_CRAWL_RATE, NullAnimator, &s_PlayerNinjaCrawl[4][5]},
+        {PLAYER_NINJA_CRAWL_R4 + 1, 0 | SF_QUICK_CALL, DoFootPrints, &s_PlayerNinjaCrawl[4][0]},
+    },
+};
+
+
+STATEp sg_PlayerNinjaCrawl[] =
+{
+    s_PlayerNinjaCrawl[0],
+    s_PlayerNinjaCrawl[1],
+    s_PlayerNinjaCrawl[2],
+    s_PlayerNinjaCrawl[3],
+    s_PlayerNinjaCrawl[4]
+};
+
+//////////////////////
+//
+// PLAYER NINJA SWIM
+//
+//////////////////////
+
+
+#define PLAYER_NINJA_SWIM_RATE 22 // Was 18
+STATE s_PlayerNinjaSwim[5][4] =
+{
+    {
+        {PLAYER_NINJA_SWIM_R0 + 0, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[0][1]},
+        {PLAYER_NINJA_SWIM_R0 + 1, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[0][2]},
+        {PLAYER_NINJA_SWIM_R0 + 2, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[0][3]},
+        {PLAYER_NINJA_SWIM_R0 + 3, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[0][0]},
+    },
+    {
+        {PLAYER_NINJA_SWIM_R1 + 0, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[1][1]},
+        {PLAYER_NINJA_SWIM_R1 + 1, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[1][2]},
+        {PLAYER_NINJA_SWIM_R1 + 2, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[1][3]},
+        {PLAYER_NINJA_SWIM_R1 + 3, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[1][0]},
+    },
+    {
+        {PLAYER_NINJA_SWIM_R2 + 0, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[2][1]},
+        {PLAYER_NINJA_SWIM_R2 + 1, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[2][2]},
+        {PLAYER_NINJA_SWIM_R2 + 2, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[2][3]},
+        {PLAYER_NINJA_SWIM_R2 + 3, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[2][0]},
+    },
+    {
+        {PLAYER_NINJA_SWIM_R3 + 0, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[3][1]},
+        {PLAYER_NINJA_SWIM_R3 + 1, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[3][2]},
+        {PLAYER_NINJA_SWIM_R3 + 2, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[3][3]},
+        {PLAYER_NINJA_SWIM_R3 + 3, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[3][0]},
+    },
+    {
+        {PLAYER_NINJA_SWIM_R4 + 0, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[4][1]},
+        {PLAYER_NINJA_SWIM_R4 + 1, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[4][2]},
+        {PLAYER_NINJA_SWIM_R4 + 2, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[4][3]},
+        {PLAYER_NINJA_SWIM_R4 + 3, PLAYER_NINJA_SWIM_RATE, NullAnimator, &s_PlayerNinjaSwim[4][0]},
+    },
+};
+
+
+STATEp sg_PlayerNinjaSwim[] =
+{
+    s_PlayerNinjaSwim[0],
+    s_PlayerNinjaSwim[1],
+    s_PlayerNinjaSwim[2],
+    s_PlayerNinjaSwim[3],
+    s_PlayerNinjaSwim[4]
+};
+
+
+#define NINJA_HeadHurl_RATE 16
+#define NINJA_Head_RATE 16
+#define NINJA_HeadFly 1134
+#define NINJA_HeadFly_RATE 16
+
+STATE s_PlayerHeadFly[5][8] =
+{
+    {
+        {NINJA_HeadFly + 0, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[0][1]},
+        {NINJA_HeadFly + 1, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[0][2]},
+        {NINJA_HeadFly + 2, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[0][3]},
+        {NINJA_HeadFly + 3, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[0][4]},
+        {NINJA_HeadFly + 4, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[0][5]},
+        {NINJA_HeadFly + 5, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[0][6]},
+        {NINJA_HeadFly + 6, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[0][7]},
+        {NINJA_HeadFly + 7, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[0][0]}
+    },
+    {
+        {NINJA_HeadFly + 0, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[1][1]},
+        {NINJA_HeadFly + 1, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[1][2]},
+        {NINJA_HeadFly + 2, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[1][3]},
+        {NINJA_HeadFly + 3, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[1][4]},
+        {NINJA_HeadFly + 4, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[1][5]},
+        {NINJA_HeadFly + 5, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[1][6]},
+        {NINJA_HeadFly + 6, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[1][7]},
+        {NINJA_HeadFly + 7, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[1][0]}
+    },
+    {
+        {NINJA_HeadFly + 0, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[2][1]},
+        {NINJA_HeadFly + 1, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[2][2]},
+        {NINJA_HeadFly + 2, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[2][3]},
+        {NINJA_HeadFly + 3, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[2][4]},
+        {NINJA_HeadFly + 4, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[2][5]},
+        {NINJA_HeadFly + 5, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[2][6]},
+        {NINJA_HeadFly + 6, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[2][7]},
+        {NINJA_HeadFly + 7, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[2][0]}
+    },
+    {
+        {NINJA_HeadFly + 0, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[3][1]},
+        {NINJA_HeadFly + 1, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[3][2]},
+        {NINJA_HeadFly + 2, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[3][3]},
+        {NINJA_HeadFly + 3, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[3][4]},
+        {NINJA_HeadFly + 4, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[3][5]},
+        {NINJA_HeadFly + 5, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[3][6]},
+        {NINJA_HeadFly + 6, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[3][7]},
+        {NINJA_HeadFly + 7, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[3][0]}
+    },
+    {
+        {NINJA_HeadFly + 0, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[4][1]},
+        {NINJA_HeadFly + 1, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[4][2]},
+        {NINJA_HeadFly + 2, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[4][3]},
+        {NINJA_HeadFly + 3, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[4][4]},
+        {NINJA_HeadFly + 4, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[4][5]},
+        {NINJA_HeadFly + 5, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[4][6]},
+        {NINJA_HeadFly + 6, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[4][7]},
+        {NINJA_HeadFly + 7, NINJA_HeadFly_RATE, NullAnimator, &s_PlayerHeadFly[4][0]}
+    },
+};
+
+STATEp sg_PlayerHeadFly[] =
+{
+    s_PlayerHeadFly[0],
+    s_PlayerHeadFly[1],
+    s_PlayerHeadFly[2],
+    s_PlayerHeadFly[3],
+    s_PlayerHeadFly[4]
+};
+
+//#define NINJA_Head_FRAMES 1
+//#define NINJA_Head_R0 1142
+//#define NINJA_Head_R1 NINJA_Head_R0 + (NINJA_Head_FRAMES * 1)
+//#define NINJA_Head_R2 NINJA_Head_R0 + (NINJA_Head_FRAMES * 2)
+//#define NINJA_Head_R3 NINJA_Head_R0 + (NINJA_Head_FRAMES * 3)
+//#define NINJA_Head_R4 NINJA_Head_R0 + (NINJA_Head_FRAMES * 4)
+
+STATE s_PlayerHead[5][1] =
+{
+    {
+        {NINJA_Head_R0 + 0, NINJA_Head_RATE, NullAnimator, &s_PlayerHead[0][0]},
+    },
+    {
+        {NINJA_Head_R1 + 0, NINJA_Head_RATE, NullAnimator, &s_PlayerHead[1][0]},
+    },
+    {
+        {NINJA_Head_R2 + 0, NINJA_Head_RATE, NullAnimator, &s_PlayerHead[2][0]},
+    },
+    {
+        {NINJA_Head_R3 + 0, NINJA_Head_RATE, NullAnimator, &s_PlayerHead[3][0]},
+    },
+    {
+        {NINJA_Head_R4 + 0, NINJA_Head_RATE, NullAnimator, &s_PlayerHead[4][0]},
+    },
+};
+
+STATEp sg_PlayerHead[] =
+{
+    s_PlayerHead[0],
+    s_PlayerHead[1],
+    s_PlayerHead[2],
+    s_PlayerHead[3],
+    s_PlayerHead[4]
+};
+
+#define NINJA_HeadHurl_FRAMES 1
+#define NINJA_HeadHurl_R0 1147
+#define NINJA_HeadHurl_R1 NINJA_HeadHurl_R0 + (NINJA_HeadHurl_FRAMES * 1)
+#define NINJA_HeadHurl_R2 NINJA_HeadHurl_R0 + (NINJA_HeadHurl_FRAMES * 2)
+#define NINJA_HeadHurl_R3 NINJA_HeadHurl_R0 + (NINJA_HeadHurl_FRAMES * 3)
+#define NINJA_HeadHurl_R4 NINJA_HeadHurl_R0 + (NINJA_HeadHurl_FRAMES * 4)
+
+STATE s_PlayerHeadHurl[5][1] =
+{
+    {
+        {NINJA_HeadHurl_R0 + 0, NINJA_HeadHurl_RATE, NullAnimator, &s_PlayerHeadHurl[0][0]},
+    },
+    {
+        {NINJA_HeadHurl_R1 + 0, NINJA_HeadHurl_RATE, NullAnimator, &s_PlayerHeadHurl[1][0]},
+    },
+    {
+        {NINJA_HeadHurl_R2 + 0, NINJA_HeadHurl_RATE, NullAnimator, &s_PlayerHeadHurl[2][0]},
+    },
+    {
+        {NINJA_HeadHurl_R3 + 0, NINJA_HeadHurl_RATE, NullAnimator, &s_PlayerHeadHurl[3][0]},
+    },
+    {
+        {NINJA_HeadHurl_R4 + 0, NINJA_HeadHurl_RATE, NullAnimator, &s_PlayerHeadHurl[4][0]},
+    },
+};
+
+STATEp sg_PlayerHeadHurl[] =
+{
+    s_PlayerHeadHurl[0],
+    s_PlayerHeadHurl[1],
+    s_PlayerHeadHurl[2],
+    s_PlayerHeadHurl[3],
+    s_PlayerHeadHurl[4]
+};
+
+#define NINJA_DIE_RATE 22
+
+STATE s_PlayerDeath[5][10] =
+{
+    {
+        {PLAYER_NINJA_DIE + 0, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[0][1]},
+        {PLAYER_NINJA_DIE + 1, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[0][2]},
+        {PLAYER_NINJA_DIE + 2, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[0][3]},
+        {PLAYER_NINJA_DIE + 3, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[0][4]},
+        {PLAYER_NINJA_DIE + 4, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[0][5]},
+        {PLAYER_NINJA_DIE + 5, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[0][6]},
+        {PLAYER_NINJA_DIE + 6, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[0][7]},
+        {PLAYER_NINJA_DIE + 7, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[0][8]},
+        {PLAYER_NINJA_DIE + 8, 0 | SF_QUICK_CALL, QueueFloorBlood, &s_PlayerDeath[0][9]},
+        {PLAYER_NINJA_DIE + 8, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[0][9]},
+    },
+    {
+        {PLAYER_NINJA_DIE + 0, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[1][1]},
+        {PLAYER_NINJA_DIE + 1, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[1][2]},
+        {PLAYER_NINJA_DIE + 2, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[1][3]},
+        {PLAYER_NINJA_DIE + 3, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[1][4]},
+        {PLAYER_NINJA_DIE + 4, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[1][5]},
+        {PLAYER_NINJA_DIE + 5, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[1][6]},
+        {PLAYER_NINJA_DIE + 6, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[1][7]},
+        {PLAYER_NINJA_DIE + 7, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[1][8]},
+        {PLAYER_NINJA_DIE + 8, 0 | SF_QUICK_CALL, QueueFloorBlood, &s_PlayerDeath[1][9]},
+        {PLAYER_NINJA_DIE + 8, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[1][9]},
+    },
+    {
+        {PLAYER_NINJA_DIE + 0, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[2][1]},
+        {PLAYER_NINJA_DIE + 1, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[2][2]},
+        {PLAYER_NINJA_DIE + 2, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[2][3]},
+        {PLAYER_NINJA_DIE + 3, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[2][4]},
+        {PLAYER_NINJA_DIE + 4, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[2][5]},
+        {PLAYER_NINJA_DIE + 5, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[2][6]},
+        {PLAYER_NINJA_DIE + 6, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[2][7]},
+        {PLAYER_NINJA_DIE + 7, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[2][8]},
+        {PLAYER_NINJA_DIE + 8, 0 | SF_QUICK_CALL, QueueFloorBlood, &s_PlayerDeath[2][9]},
+        {PLAYER_NINJA_DIE + 8, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[2][9]},
+    },
+    {
+        {PLAYER_NINJA_DIE + 0, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[3][1]},
+        {PLAYER_NINJA_DIE + 1, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[3][2]},
+        {PLAYER_NINJA_DIE + 2, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[3][3]},
+        {PLAYER_NINJA_DIE + 3, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[3][4]},
+        {PLAYER_NINJA_DIE + 4, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[3][5]},
+        {PLAYER_NINJA_DIE + 5, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[3][6]},
+        {PLAYER_NINJA_DIE + 6, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[3][7]},
+        {PLAYER_NINJA_DIE + 7, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[3][8]},
+        {PLAYER_NINJA_DIE + 8, 0 | SF_QUICK_CALL, QueueFloorBlood, &s_PlayerDeath[3][9]},
+        {PLAYER_NINJA_DIE + 8, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[3][9]},
+    },
+    {
+        {PLAYER_NINJA_DIE + 0, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[4][1]},
+        {PLAYER_NINJA_DIE + 1, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[4][2]},
+        {PLAYER_NINJA_DIE + 2, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[4][3]},
+        {PLAYER_NINJA_DIE + 3, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[4][4]},
+        {PLAYER_NINJA_DIE + 4, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[4][5]},
+        {PLAYER_NINJA_DIE + 5, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[4][6]},
+        {PLAYER_NINJA_DIE + 6, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[4][7]},
+        {PLAYER_NINJA_DIE + 7, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[4][8]},
+        {PLAYER_NINJA_DIE + 8, 0 | SF_QUICK_CALL, QueueFloorBlood, &s_PlayerDeath[4][9]},
+        {PLAYER_NINJA_DIE + 8, NINJA_DIE_RATE, NullAnimator, &s_PlayerDeath[4][9]},
+    },
+};
+
+STATEp sg_PlayerDeath[] =
+{
+    s_PlayerDeath[0],
+    s_PlayerDeath[1],
+    s_PlayerDeath[2],
+    s_PlayerDeath[3],
+    s_PlayerDeath[4]
+};
+
+//////////////////////
+//
+// PLAYER NINJA SWORD
+//
+//////////////////////
+
+
+#define PLAYER_NINJA_SWORD_RATE 12
+STATE s_PlayerNinjaSword[5][4] =
+{
+    {
+        {PLAYER_NINJA_SWORD_R0 + 0, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[0][1]},
+        {PLAYER_NINJA_SWORD_R0 + 1, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[0][2]},
+        {PLAYER_NINJA_SWORD_R0 + 2, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[0][3]},
+        {PLAYER_NINJA_SWORD_R0 + 2, PLAYER_NINJA_SWORD_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaSword[0][0]},
+    },
+    {
+        {PLAYER_NINJA_SWORD_R1 + 0, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[1][1]},
+        {PLAYER_NINJA_SWORD_R1 + 1, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[1][2]},
+        {PLAYER_NINJA_SWORD_R1 + 2, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[1][3]},
+        {PLAYER_NINJA_SWORD_R1 + 2, PLAYER_NINJA_SWORD_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaSword[1][0]},
+    },
+    {
+        {PLAYER_NINJA_SWORD_R2 + 0, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[2][1]},
+        {PLAYER_NINJA_SWORD_R2 + 1, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[2][2]},
+        {PLAYER_NINJA_SWORD_R2 + 2, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[2][3]},
+        {PLAYER_NINJA_SWORD_R2 + 2, PLAYER_NINJA_SWORD_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaSword[2][0]},
+    },
+    {
+        {PLAYER_NINJA_SWORD_R3 + 0, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[3][1]},
+        {PLAYER_NINJA_SWORD_R3 + 1, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[3][2]},
+        {PLAYER_NINJA_SWORD_R3 + 2, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[3][3]},
+        {PLAYER_NINJA_SWORD_R3 + 2, PLAYER_NINJA_SWORD_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaSword[3][0]},
+    },
+    {
+        {PLAYER_NINJA_SWORD_R4 + 0, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[4][1]},
+        {PLAYER_NINJA_SWORD_R4 + 1, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[4][2]},
+        {PLAYER_NINJA_SWORD_R4 + 2, PLAYER_NINJA_SWORD_RATE, NullAnimator, &s_PlayerNinjaSword[4][3]},
+        {PLAYER_NINJA_SWORD_R4 + 2, PLAYER_NINJA_SWORD_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaSword[4][0]},
+    },
+};
+
+
+STATEp sg_PlayerNinjaSword[] =
+{
+    s_PlayerNinjaSword[0],
+    s_PlayerNinjaSword[1],
+    s_PlayerNinjaSword[2],
+    s_PlayerNinjaSword[3],
+    s_PlayerNinjaSword[4]
+};
+
+//////////////////////
+//
+// PLAYER NINJA PUNCH
+//
+//////////////////////
+
+
+#define PLAYER_NINJA_PUNCH_RATE 15
+STATE s_PlayerNinjaPunch[5][4] =
+{
+    {
+        {PLAYER_NINJA_PUNCH_R0 + 0, PLAYER_NINJA_PUNCH_RATE, NullAnimator, &s_PlayerNinjaPunch[0][1]},
+        {PLAYER_NINJA_PUNCH_R0 + 1, PLAYER_NINJA_PUNCH_RATE, NullAnimator, &s_PlayerNinjaPunch[0][2]},
+        {PLAYER_NINJA_PUNCH_R0 + 1, PLAYER_NINJA_PUNCH_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaPunch[0][2]},
+    },
+    {
+        {PLAYER_NINJA_PUNCH_R1 + 0, PLAYER_NINJA_PUNCH_RATE, NullAnimator, &s_PlayerNinjaPunch[1][1]},
+        {PLAYER_NINJA_PUNCH_R1 + 1, PLAYER_NINJA_PUNCH_RATE, NullAnimator, &s_PlayerNinjaPunch[1][2]},
+        {PLAYER_NINJA_PUNCH_R1 + 1, PLAYER_NINJA_PUNCH_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaPunch[1][2]},
+    },
+    {
+        {PLAYER_NINJA_PUNCH_R2 + 0, PLAYER_NINJA_PUNCH_RATE, NullAnimator, &s_PlayerNinjaPunch[2][1]},
+        {PLAYER_NINJA_PUNCH_R2 + 1, PLAYER_NINJA_PUNCH_RATE, NullAnimator, &s_PlayerNinjaPunch[2][2]},
+        {PLAYER_NINJA_PUNCH_R2 + 1, PLAYER_NINJA_PUNCH_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaPunch[2][2]},
+    },
+    {
+        {PLAYER_NINJA_PUNCH_R3 + 0, PLAYER_NINJA_PUNCH_RATE, NullAnimator, &s_PlayerNinjaPunch[3][1]},
+        {PLAYER_NINJA_PUNCH_R3 + 1, PLAYER_NINJA_PUNCH_RATE, NullAnimator, &s_PlayerNinjaPunch[3][2]},
+        {PLAYER_NINJA_PUNCH_R3 + 1, PLAYER_NINJA_PUNCH_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaPunch[3][2]},
+    },
+    {
+        {PLAYER_NINJA_PUNCH_R4 + 0, PLAYER_NINJA_PUNCH_RATE, NullAnimator, &s_PlayerNinjaPunch[4][1]},
+        {PLAYER_NINJA_PUNCH_R4 + 1, PLAYER_NINJA_PUNCH_RATE, NullAnimator, &s_PlayerNinjaPunch[4][2]},
+        {PLAYER_NINJA_PUNCH_R4 + 1, PLAYER_NINJA_PUNCH_RATE | SF_PLAYER_FUNC, DoPlayerSpriteReset, &s_PlayerNinjaPunch[4][2]},
+    },
+};
+
+
+STATEp sg_PlayerNinjaPunch[] =
+{
+    s_PlayerNinjaPunch[0],
+    s_PlayerNinjaPunch[1],
+    s_PlayerNinjaPunch[2],
+    s_PlayerNinjaPunch[3],
+    s_PlayerNinjaPunch[4]
+};
+
+//////////////////////
+//
+// PLAYER NINJA FLY
+//
+//////////////////////
+
+
+#define PLAYER_NINJA_FLY_RATE 15
+#define PLAYER_NINJA_FLY_R0 1200
+#define PLAYER_NINJA_FLY_R1 1200
+#define PLAYER_NINJA_FLY_R2 1200
+#define PLAYER_NINJA_FLY_R3 1200
+#define PLAYER_NINJA_FLY_R4 1200
+
+STATE s_PlayerNinjaFly[5][4] =
+{
+    {
+        {PLAYER_NINJA_FLY_R0 + 0, PLAYER_NINJA_FLY_RATE, NullAnimator, &s_PlayerNinjaFly[0][0]},
+    },
+    {
+        {PLAYER_NINJA_FLY_R1 + 0, PLAYER_NINJA_FLY_RATE, NullAnimator, &s_PlayerNinjaFly[1][0]},
+    },
+    {
+        {PLAYER_NINJA_FLY_R2 + 0, PLAYER_NINJA_FLY_RATE, NullAnimator, &s_PlayerNinjaFly[2][0]},
+    },
+    {
+        {PLAYER_NINJA_FLY_R3 + 0, PLAYER_NINJA_FLY_RATE, NullAnimator, &s_PlayerNinjaFly[3][0]},
+    },
+    {
+        {PLAYER_NINJA_FLY_R4 + 0, PLAYER_NINJA_FLY_RATE, NullAnimator, &s_PlayerNinjaFly[4][0]},
+    },
+};
+
+
+STATEp sg_PlayerNinjaFly[] =
+{
+    s_PlayerNinjaFly[0],
+    s_PlayerNinjaFly[1],
+    s_PlayerNinjaFly[2],
+    s_PlayerNinjaFly[3],
+    s_PlayerNinjaFly[4]
+};
+
+/////////////////////////////////////////////////////////////////////////////
+
+void
+DoPlayerSpriteThrow(PLAYERp pp)
+{
+    if (!TEST(pp->Flags, PF_DIVING|PF_FLYING|PF_CRAWLING))
+    {
+        if (pp->CurWpn == pp->Wpn[WPN_SWORD] && User[pp->PlayerSprite]->Rot != sg_PlayerNinjaSword)
+            NewStateGroup(pp->PlayerSprite, sg_PlayerNinjaSword);
+        else
+            //if (pp->CurWpn == pp->Wpn[WPN_FIST] && User[pp->PlayerSprite]->Rot != sg_PlayerNinjaPunch)
+            NewStateGroup(pp->PlayerSprite, sg_PlayerNinjaPunch);
+        //else
+        //    NewStateGroup(pp->PlayerSprite, sg_PlayerNinjaThrow);
+    }
 }
 
-void P_UpdateScreenPal(DukePlayer_t * const pPlayer)
+int
+DoPlayerSpriteReset(short SpriteNum)
 {
-    int       inWater       = 0;
-    int const playerSectnum = pPlayer->cursectnum;
+    USERp u = User[SpriteNum];
+    PLAYERp pp;
 
-    if (pPlayer->heat_on)
-        pPlayer->palette = SLIMEPAL;
-    else if (playerSectnum < 0)
-        pPlayer->palette = BASEPAL;
-    else if (sector[playerSectnum].ceilingpicnum >= FLOORSLIME && sector[playerSectnum].ceilingpicnum <= FLOORSLIME + 2)
-    {
-        pPlayer->palette = SLIMEPAL;
-        inWater          = 1;
-    }
+    if (!u->PlayerP)
+        return 0;
+
+    pp = u->PlayerP;
+
+    // need to figure out what frames to put sprite into
+    if (pp->DoPlayerAction == DoPlayerCrawl)
+        NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Crawl);
     else
     {
-        pPlayer->palette     = (sector[pPlayer->cursectnum].lotag == ST_2_UNDERWATER) ? WATERPAL : BASEPAL;
-        inWater              = 1;
+        if (TEST(pp->Flags, PF_PLAYER_MOVED))
+            NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Run);
+        else
+            NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Stand);
     }
 
-    g_restorePalette = 1+inWater;
+    return 0;
 }
 
-static void P_IncurDamage(DukePlayer_t * const pPlayer)
+int
+SetVisHigh(void)
 {
-    if (VM_OnEvent(EVENT_INCURDAMAGE, pPlayer->i, P_Get(pPlayer->i)) != 0)
-        return;
+//    g_visibility = NormalVisibility>>1;
+    return 0;
+}
 
-    sprite[pPlayer->i].extra -= pPlayer->extra_extra8>>8;
+int
+SetVisNorm(void)
+{
+//    g_visibility = NormalVisibility;
+    return 0;
+}
 
-    int playerDamage = sprite[pPlayer->i].extra - pPlayer->last_extra;
+void pSetVisNorm(PANEL_SPRITEp /*psp*/)
+{
+//    SetVisNorm();
+}
 
-    if (playerDamage >= 0)
-        return;
-
-    pPlayer->extra_extra8 = 0;
-
-    if (pPlayer->inv_amount[GET_SHIELD] > 0)
+short
+GetDeltaAngle(short ang1, short ang2)
+{
+    // Look at the smaller angle if > 1024 (180 degrees)
+    if (labs(ang1 - ang2) > 1024)
     {
-        int const shieldDamage = playerDamage * (20 + (krand()%30)) / 100;
+        if (ang1 <= 1024)
+            ang1 += 2048;
 
-        playerDamage                     -= shieldDamage;
-        pPlayer->inv_amount[GET_SHIELD] += shieldDamage;
+        if (ang2 <= 1024)
+            ang2 += 2048;
+    }
 
-        if (pPlayer->inv_amount[GET_SHIELD] < 0)
+    //if (ang1 - ang2 == -1024)
+    //    return(1024);
+
+    return ang1 - ang2;
+
+}
+
+fix16_t
+GetDeltaQ16Angle(fix16_t ang1, fix16_t ang2)
+{
+    // Look at the smaller angle if > 1024 (180 degrees)
+    if (fix16_abs(ang1 - ang2) > fix16_from_int(1024))
+    {
+        if (ang1 <= fix16_from_int(1024))
+            ang1 += fix16_from_int(2048);
+
+        if (ang2 <= fix16_from_int(1024))
+            ang2 += fix16_from_int(2048);
+    }
+
+    //if (ang1 - ang2 == -fix16_from_int(1024))
+    //    return(fix16_from_int(1024));
+
+    return ang1 - ang2;
+}
+
+TARGET_SORT TargetSort[MAX_TARGET_SORT];
+unsigned TargetSortCount;
+
+static int CompareTarget(void const * a, void const * b)
+{
+    auto tgt1 = (TARGET_SORT const *)a;
+    auto tgt2 = (TARGET_SORT const *)b;
+
+    // will return a number less than 0 if tgt1 < tgt2
+    return tgt2->weight - tgt1->weight;
+}
+
+SWBOOL
+FAFcansee(int32_t xs, int32_t ys, int32_t zs, int16_t sects,
+          int32_t xe, int32_t ye, int32_t ze, int16_t secte);
+
+int
+DoPickTarget(SPRITEp sp, uint32_t max_delta_ang, SWBOOL skip_targets)
+{
+#define PICK_DIST 40000L
+
+    short i, nexti, angle2, delta_ang;
+    int dist, zh;
+    SPRITEp ep;
+    USERp eu;
+    int16_t* shp;
+    USERp u = User[sp - sprite];
+    int ezh, ezhl, ezhm;
+    unsigned ndx;
+    TARGET_SORTp ts;
+    int ang_weight, dist_weight;
+
+    // !JIM! Watch out for max_delta_ang of zero!
+    if (max_delta_ang == 0) max_delta_ang = 1;
+
+    TargetSortCount = 0;
+    TargetSort[0].sprite_num = -1;
+
+    for (shp = StatDamageList; shp < &StatDamageList[SIZ(StatDamageList)]; shp++)
+    {
+        TRAVERSE_SPRITE_STAT(headspritestat[*shp], i, nexti)
         {
-            playerDamage += pPlayer->inv_amount[GET_SHIELD];
-            pPlayer->inv_amount[GET_SHIELD] = 0;
-        }
-    }
+            ep = &sprite[i];
+            eu = User[i];
 
-    sprite[pPlayer->i].extra = pPlayer->last_extra + playerDamage;
+            // don't pick yourself
+            if (i == (sp - sprite))
+                continue;
 
-    int const admg = klabs(playerDamage);
-    I_AddForceFeedback((admg << FF_PLAYER_DMG_SCALE), (admg << FF_PLAYER_DMG_SCALE), (admg << FF_PLAYER_TIME_SCALE));
-}
-
-void P_QuickKill(DukePlayer_t * const pPlayer)
-{
-    P_PalFrom(pPlayer, 48, 48,48,48);
-    I_AddForceFeedback(pPlayer->max_player_health << FF_PLAYER_DMG_SCALE, pPlayer->max_player_health << FF_PLAYER_DMG_SCALE, pPlayer->max_player_health << FF_PLAYER_TIME_SCALE);
-
-    sprite[pPlayer->i].extra = 0;
-    sprite[pPlayer->i].cstat |= 32768;
-
-#ifndef EDUKE32_STANDALONE
-    if (!FURY && ud.god == 0)
-        A_DoGuts(pPlayer->i,JIBS6,8);
-#endif
-}
-
-static void Proj_DoWaterTracers(vec3_t startPos, vec3_t const *endPos, int n, int16_t sectNum)
-{
-    if ((klabs(startPos.x - endPos->x) + klabs(startPos.y - endPos->y)) < 3084)
-        return;
-
-    vec3_t const v_inc = { tabledivide32_noinline(endPos->x - startPos.x, n + 1), tabledivide32_noinline(endPos->y - startPos.y, n + 1),
-                           tabledivide32_noinline(endPos->z - startPos.z, n + 1) };
-
-    for (bssize_t i=n; i>0; i--)
-    {
-        startPos.x += v_inc.x;
-        startPos.y += v_inc.y;
-        startPos.z += v_inc.z;
-
-        updatesector(startPos.x, startPos.y, &sectNum);
-
-        if (sectNum < 0)
-            break;
-
-        A_InsertSprite(sectNum, startPos.x, startPos.y, startPos.z, WATERBUBBLE, -32, 4 + (krand() & 3), 4 + (krand() & 3), krand() & 2047, 0, 0,
-                       g_player[0].ps->i, 5);
-    }
-}
-
-static inline projectile_t *Proj_GetProjectile(int tile)
-{
-    return ((unsigned)tile < MAXTILES && g_tile[tile].proj) ? g_tile[tile].proj : &DefaultProjectile;
-}
-
-static void A_HitscanProjTrail(const vec3_t *startPos, const vec3_t *endPos, int projAng, int tileNum, int16_t sectNum)
-{
-    const projectile_t *const pProj = Proj_GetProjectile(tileNum);
-
-    vec3_t        spawnPos = { startPos->x + tabledivide32_noinline(sintable[(348 + projAng + 512) & 2047], pProj->offset),
-                               startPos->y + tabledivide32_noinline(sintable[(projAng + 348) & 2047], pProj->offset),
-                               startPos->z + 1024 + (pProj->toffset << 8) };
-
-    int32_t      n         = ((FindDistance2D(spawnPos.x - endPos->x, spawnPos.y - endPos->y)) >> 8) + 1;
-
-    vec3_t const increment = { tabledivide32_noinline((endPos->x - spawnPos.x), n),
-                               tabledivide32_noinline((endPos->y - spawnPos.y), n),
-                               tabledivide32_noinline((endPos->z - spawnPos.z), n) };
-
-    spawnPos.x += increment.x >> 2;
-    spawnPos.y += increment.y >> 2;
-    spawnPos.z += increment.z >> 2;
-
-    int32_t j;
-
-    for (bssize_t i = pProj->tnum; i > 0; --i)
-    {
-        spawnPos.x += increment.x;
-        spawnPos.y += increment.y;
-        spawnPos.z += increment.z;
-
-        updatesectorz(spawnPos.x, spawnPos.y, spawnPos.z, &sectNum);
-
-        if (sectNum < 0)
-            break;
-
-        getzsofslope(sectNum, spawnPos.x, spawnPos.y, &n, &j);
-
-        if (spawnPos.z > j || spawnPos.z < n)
-            break;
-
-        j = A_InsertSprite(sectNum, spawnPos.x, spawnPos.y, spawnPos.z, pProj->trail, -32,
-                           pProj->txrepeat, pProj->tyrepeat, projAng, 0, 0, g_player[0].ps->i, 0);
-        changespritestat(j, STAT_ACTOR);
-    }
-}
-
-int32_t A_GetHitscanRange(int spriteNum)
-{
-    int const zOffset = (PN(spriteNum) == APLAYER) ? g_player[P_Get(spriteNum)].ps->spritezoffset : 0;
-    hitdata_t hitData;
-
-    SZ(spriteNum) -= zOffset;
-    hitscan(&sprite[spriteNum].xyz, SECT(spriteNum), sintable[(SA(spriteNum) + 512) & 2047],
-            sintable[SA(spriteNum) & 2047], 0, &hitData, CLIPMASK1);
-    SZ(spriteNum) += zOffset;
-
-    return (FindDistance2D(hitData.x - SX(spriteNum), hitData.y - SY(spriteNum)));
-}
-
-static int A_FindTargetSprite(const spritetype *pSprite, int projAng, int projecTile)
-{
-    static int const aimstats[] = {
-        STAT_PLAYER, STAT_DUMMYPLAYER, STAT_ACTOR, STAT_ZOMBIEACTOR
-    };
-
-    int const playerNum = pSprite->picnum == APLAYER ? P_GetP(pSprite) : -1;
-
-    if (playerNum != -1)
-    {
-        if (!g_player[playerNum].ps->auto_aim)
-            return -1;
-
-        if (g_player[playerNum].ps->auto_aim == 2)
-        {
-            if (A_CheckSpriteTileFlags(projecTile,SFLAG_PROJECTILE) && (Proj_GetProjectile(projecTile)->workslike & PROJECTILE_RPG))
-                return -1;
-
-#ifndef EDUKE32_STANDALONE
-            if (!FURY)
+            if (skip_targets != 2) // Used for spriteinfo mode
             {
-                switch (tileGetMapping(projecTile))
+                if (skip_targets && TEST(eu->Flags, SPR_TARGETED))
+                    continue;
+
+                // don't pick a dead player
+                if (eu->PlayerP && TEST(eu->PlayerP->Flags, PF_DEAD))
+                    continue;
+            }
+
+            // Only look at closest ones
+            //if ((dist = Distance(sp->x, sp->y, ep->x, ep->y)) > PICK_DIST)
+            if ((dist = FindDistance3D(sp->x - ep->x, sp->y - ep->y, sp->z - ep->z)) > PICK_DIST)
+                continue;
+
+            if (skip_targets != 2) // Used for spriteinfo mode
+            {
+                // don't set off mine
+                if (!TEST(ep->extra, SPRX_PLAYER_OR_ENEMY))
+                    continue;
+            }
+
+            // Get the angle to the player
+            angle2 = NORM_ANGLE(getangle(ep->x - sp->x, ep->y - sp->y));
+
+            // Get the angle difference
+            // delta_ang = labs(fix16_to_int(pp->q16ang) - angle2);
+
+            delta_ang = labs(GetDeltaAngle(sp->ang, angle2));
+
+            // If delta_ang not in the range skip this one
+            if (delta_ang > (int)max_delta_ang)
+                continue;
+
+            if (u && u->PlayerP)
+                zh = u->PlayerP->posz;
+            else
+                zh = SPRITEp_TOS(sp) + DIV4(SPRITEp_SIZE_Z(sp));
+
+            ezh = SPRITEp_TOS(ep) + DIV4(SPRITEp_SIZE_Z(ep));
+            ezhm = SPRITEp_TOS(ep) + DIV2(SPRITEp_SIZE_Z(ep));
+            ezhl = SPRITEp_BOS(ep) - DIV4(SPRITEp_SIZE_Z(ep));
+
+            // If you can't see 'em you can't shoot 'em
+            if (!FAFcansee(sp->x, sp->y, zh, sp->sectnum, ep->x, ep->y, ezh, ep->sectnum) &&
+                !FAFcansee(sp->x, sp->y, zh, sp->sectnum, ep->x, ep->y, ezhm, ep->sectnum) &&
+                !FAFcansee(sp->x, sp->y, zh, sp->sectnum, ep->x, ep->y, ezhl, ep->sectnum)
+                )
+                continue;
+
+            // get ndx - there is only room for 15
+            if (TargetSortCount > SIZ(TargetSort)-1)
+            {
+                for (ndx = 0; ndx < SIZ(TargetSort); ndx++)
                 {
-                    case TONGUE__:
-                    case FREEZEBLAST__:
-                    case SHRINKSPARK__:
-                    case SHRINKER__:
-                    case RPG__:
-                    case FIRELASER__:
-                    case SPIT__:
-                    case COOLEXPLOSION1__:
-                        return -1;
-                    default:
+                    if (dist < TargetSort[ndx].dist)
                         break;
                 }
+
+                if (ndx == SIZ(TargetSort))
+                    continue;
             }
-#endif
-        }
-    }
-
-    int const spriteAng = pSprite->ang;
-
-#ifndef EDUKE32_STANDALONE
-    int const isShrinker = (pSprite->picnum == APLAYER && PWEAPON(playerNum, g_player[playerNum].ps->curr_weapon, WorksLike) == SHRINKER_WEAPON);
-    int const isFreezer  = (pSprite->picnum == APLAYER && PWEAPON(playerNum, g_player[playerNum].ps->curr_weapon, WorksLike) == FREEZE_WEAPON);
-#endif
-
-    vec2_t const d1 = { sintable[(spriteAng + 512 - projAng) & 2047], sintable[(spriteAng - projAng) & 2047] };
-    vec2_t const d2 = { sintable[(spriteAng + 512 + projAng) & 2047], sintable[(spriteAng + projAng) & 2047] };
-    vec2_t const d3 = { sintable[(spriteAng + 512) & 2047], sintable[spriteAng & 2047] };
-
-    int lastDist   = INT32_MAX;
-    int bestSprite = -1;
-
-    for (bssize_t k=0; k<4; k++)
-    {
-        if (bestSprite >= 0)
-            break;
-
-        for (bssize_t spriteNum=headspritestat[aimstats[k]]; spriteNum >= 0; spriteNum=nextspritestat[spriteNum])
-        {
-            if ((sprite[spriteNum].xrepeat > 0 && sprite[spriteNum].extra >= 0 &&
-                 (sprite[spriteNum].cstat & (257 + 32768)) == 257) &&
-                (A_CheckEnemySprite(&sprite[spriteNum]) || k < 2))
+            else
             {
-                if (A_CheckEnemySprite(&sprite[spriteNum]) || PN(spriteNum) == APLAYER)
-                {
-                    if (PN(spriteNum) == APLAYER && pSprite->picnum == APLAYER && pSprite != &sprite[spriteNum] &&
-                        (GTFLAGS(GAMETYPE_PLAYERSFRIENDLY) ||
-                         (GTFLAGS(GAMETYPE_TDM) && g_player[P_Get(spriteNum)].ps->team == g_player[playerNum].ps->team)))
-                        continue;
-
-#ifndef EDUKE32_STANDALONE
-                    if (!FURY && ((isShrinker && sprite[spriteNum].xrepeat < 30
-                        && (PN(spriteNum) == SHARK || !(PN(spriteNum) >= GREENSLIME && PN(spriteNum) <= GREENSLIME + 7)))
-                        || (isFreezer && sprite[spriteNum].pal == 1)))
-                        continue;
-#endif
-                }
-
-                vec2_t const vd = { (SX(spriteNum) - pSprite->x), (SY(spriteNum) - pSprite->y) };
-
-                if ((d1.y * vd.x <= d1.x * vd.y) && (d2.y * vd.x >= d2.x * vd.y))
-                {
-                    int const spriteDist = mulscale14(d3.x, vd.x) + mulscale14(d3.y, vd.y);
-
-                    if (spriteDist > 512 && spriteDist < lastDist)
-                    {
-                        int onScreen = 1;
-
-                        if (pSprite->picnum == APLAYER)
-                        {
-                            auto const ps = g_player[P_GetP(pSprite)].ps;
-                            onScreen = (klabs(scale(SZ(spriteNum)-pSprite->z,10,spriteDist)-fix16_to_int(ps->q16horiz+ps->q16horizoff-F16(100))) < 100);
-                        }
-
-#ifndef EDUKE32_STANDALONE
-                        int const zOffset = (!FURY && (PN(spriteNum) == ORGANTIC || PN(spriteNum) == ROTATEGUN)) ? 0 : ZOFFSET5;
-#else
-                        int const zOffset = ZOFFSET5;
-#endif
-                        int const canSee = cansee(SX(spriteNum), SY(spriteNum), SZ(spriteNum) - zOffset, SECT(spriteNum),
-                                                  pSprite->x, pSprite->y, pSprite->z - ZOFFSET5, pSprite->sectnum);
-
-                        if (onScreen && canSee)
-                        {
-                            lastDist   = spriteDist;
-                            bestSprite = spriteNum;
-                        }
-                    }
-                }
+                ndx = TargetSortCount;
             }
+
+            ts = &TargetSort[ndx];
+            ts->sprite_num = i;
+            ts->dang = delta_ang;
+            ts->dist = dist;
+            // gives a value between 0 and 65535
+            ang_weight = ((max_delta_ang - ts->dang)<<16)/max_delta_ang;
+            // gives a value between 0 and 65535
+            dist_weight = ((DIV2(PICK_DIST) - DIV2(ts->dist))<<16)/DIV2(PICK_DIST);
+            //weighted average
+            ts->weight = (ang_weight + dist_weight*4)/5;
+
+            TargetSortCount++;
+            if (TargetSortCount >= SIZ(TargetSort))
+                TargetSortCount = SIZ(TargetSort);
         }
     }
 
-    return bestSprite;
+    if (TargetSortCount > 1)
+        qsort(&TargetSort, TargetSortCount, sizeof(TARGET_SORT), CompareTarget);
+
+    return TargetSort[0].sprite_num;
 }
 
-static void A_SetHitData(int spriteNum, const hitdata_t *hitData)
+void
+DoPlayerResetMovement(PLAYERp pp)
 {
-    actor[spriteNum].t_data[6] = hitData->wall;
-    actor[spriteNum].t_data[7] = hitData->sect;
-    actor[spriteNum].t_data[8] = hitData->sprite;
+    pp->xvect = pp->oxvect = 0;
+    pp->yvect = pp->oxvect = 0;
+    pp->slide_xvect = 0;
+    pp->slide_yvect = 0;
+    pp->drive_angvel = 0;
+    RESET(pp->Flags, PF_PLAYER_MOVED);
 }
 
-#ifndef EDUKE32_STANDALONE
-static int CheckShootSwitchTile(int tileNum)
+void
+DoPlayerTeleportPause(PLAYERp pp)
 {
-    if (FURY)
-        return 0;
+    USERp u = User[pp->PlayerSprite];
+//    SPRITEp sp = pp->SpriteP;
 
-    return tileNum == DIPSWITCH || tileNum == DIPSWITCH + 1 || tileNum == DIPSWITCH2 || tileNum == DIPSWITCH2 + 1 ||
-           tileNum == DIPSWITCH3 || tileNum == DIPSWITCH3 + 1 || tileNum == HANDSWITCH || tileNum == HANDSWITCH + 1;
+    // set this so we don't get stuck in teleporting loop
+    pp->lastcursectnum = pp->cursectnum;
+
+    if ((u->WaitTics-=synctics) <= 0)
+    {
+        //RESET(sp->cstat, CSTAT_SPRITE_TRANSLUCENT);
+        RESET(pp->Flags2, PF2_TELEPORTED);
+        DoPlayerResetMovement(pp);
+        DoPlayerBeginRun(pp);
+        return;
+    }
+
+    //sp->shade -= 2;
+    //if (sp->shade <= 0)
+    //    sp->shade = 0;
+
+    //DoPlayerBob(pp);
 }
+
+void
+DoPlayerTeleportToSprite(PLAYERp pp, SPRITEp sp)
+{
+    pp->camq16ang = pp->q16ang = pp->oq16ang = fix16_from_int(sp->ang);
+    pp->camq16horiz = pp->q16horiz; // Ensure horiz is initially locked
+    pp->posx = pp->oposx = pp->oldposx = sp->x;
+    pp->posy = pp->oposy = pp->oldposy = sp->y;
+
+    //getzsofslope(sp->sectnum, pp->posx, pp->posy, &cz, &fz);
+    //pp->posz = pp->oposz = fz - PLAYER_HEIGHT;
+
+    pp->posz = pp->oposz = sp->z - PLAYER_HEIGHT;
+
+    COVERupdatesector(pp->posx, pp->posy, &pp->cursectnum);
+    //pp->lastcursectnum = pp->cursectnum;
+    SET(pp->Flags2, PF2_TELEPORTED);
+}
+
+void
+DoPlayerTeleportToOffset(PLAYERp pp)
+{
+    pp->oposx = pp->oldposx = pp->posx;
+    pp->oposy = pp->oldposy = pp->posy;
+
+    COVERupdatesector(pp->posx, pp->posy, &pp->cursectnum);
+    //pp->lastcursectnum = pp->cursectnum;
+    SET(pp->Flags2, PF2_TELEPORTED);
+}
+
+void
+DoSpawnTeleporterEffect(SPRITEp sp)
+{
+    extern STATE s_TeleportEffect[];
+    short effect;
+    int nx, ny;
+    SPRITEp ep;
+
+    nx = MOVEx(512L, sp->ang);
+    ny = MOVEy(512L, sp->ang);
+
+    nx += sp->x;
+    ny += sp->y;
+
+    effect = SpawnSprite(STAT_MISSILE, 0, s_TeleportEffect, sp->sectnum,
+                         nx, ny, SPRITEp_TOS(sp) + Z(16),
+                         sp->ang, 0);
+
+    ep = &sprite[effect];
+
+    setspritez(effect, &ep->xyz);
+
+    ep->shade = -40;
+    ep->xrepeat = ep->yrepeat = 42;
+    SET(ep->cstat, CSTAT_SPRITE_YCENTER);
+    RESET(ep->cstat, CSTAT_SPRITE_BLOCK|CSTAT_SPRITE_BLOCK_HITSCAN);
+
+    SET(ep->cstat, CSTAT_SPRITE_ALIGNMENT_WALL);
+    //ep->ang = NORM_ANGLE(ep->ang + 512);
+}
+
+void
+DoSpawnTeleporterEffectPlace(SPRITEp sp)
+{
+    extern STATE s_TeleportEffect[];
+    short effect;
+    SPRITEp ep;
+
+    effect = SpawnSprite(STAT_MISSILE, 0, s_TeleportEffect, sp->sectnum,
+                         sp->x, sp->y, SPRITEp_TOS(sp) + Z(16),
+                         sp->ang, 0);
+
+    ep = &sprite[effect];
+
+    setspritez(effect, &ep->xyz);
+
+    ep->shade = -40;
+    ep->xrepeat = ep->yrepeat = 42;
+    SET(ep->cstat, CSTAT_SPRITE_YCENTER);
+    RESET(ep->cstat, CSTAT_SPRITE_BLOCK|CSTAT_SPRITE_BLOCK_HITSCAN);
+
+    SET(ep->cstat, CSTAT_SPRITE_ALIGNMENT_WALL);
+}
+
+void
+DoPlayerWarpTeleporter(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+    SPRITEp sp = pp->SpriteP;
+    short pnum;
+    SPRITEp sp_warp;
+
+#if 0
+    TAG 2 = match
+            TAG 3 = Type
+                    Sprite - 0,32 always teleports you to the center at the angle the sprite is facing
+    Offset - 1 always teleports you by the offset.Does not touch the angle
+    TAG 4 = angle
+            TAG 5 to 8 = random match locations
 #endif
 
-static int32_t safeldist(int32_t spriteNum, const void *pSprite)
-{
-    int32_t distance = ldist(&sprite[spriteNum], pSprite);
-    return distance ? distance : 1;
-}
 
-// flags:
-//  1: do sprite center adjustment (cen-=(8<<8)) for GREENSLIME or ROTATEGUN
-//  2: do auto getangle only if not RECON (if clear, do unconditionally)
-static int GetAutoAimAng(int spriteNum, int playerNum, int projecTile, int zAdjust, int aimFlags,
-                               const vec3_t *startPos, int projVel, int32_t *pZvel, int *pAng)
-{
-    int returnSprite = -1;
-
-    Bassert((unsigned)playerNum < MAXPLAYERS);
-
-    Gv_SetVar(g_aimAngleVarID, g_player[playerNum].ps->auto_aim == 3 ? AUTO_AIM_ANGLE<<1 : AUTO_AIM_ANGLE, spriteNum, playerNum);
-
-    VM_OnEvent(EVENT_GETAUTOAIMANGLE, spriteNum, playerNum);
-
-    int aimang = Gv_GetVar(g_aimAngleVarID, spriteNum, playerNum);
-    if (aimang > 0)
-        returnSprite = A_FindTargetSprite(&sprite[spriteNum], aimang, projecTile);
-
-    if (returnSprite >= 0)
-    {
-        auto const pSprite = (uspriteptr_t)&sprite[returnSprite];
-        int        zCenter = 2 * (pSprite->yrepeat * tilesiz[pSprite->picnum].y) + zAdjust;
-
-        if (aimFlags &&
-            (STANDALONE_EVAL(false, (pSprite->picnum >= GREENSLIME && pSprite->picnum <= GREENSLIME + 7) || pSprite->picnum == ROTATEGUN) || pSprite->cstat & CSTAT_SPRITE_YCENTER))
-            zCenter -= ZOFFSET3;
-
-        int spriteDist = safeldist(g_player[playerNum].ps->i, &sprite[returnSprite]);
-        *pZvel         = tabledivide32_noinline((pSprite->z - startPos->z - zCenter) * projVel, spriteDist);
-
-        if (!(aimFlags&2) || sprite[returnSprite].picnum != RECON)
-            *pAng = getangle(pSprite->x-startPos->x, pSprite->y-startPos->y);
-    }
-
-    return returnSprite;
-}
-
-static void Proj_MaybeSpawn(int spriteNum, int projecTile, const hitdata_t *hitData)
-{
-    // atwith < 0 is for hard-coded projectiles
-    projectile_t *const pProj      = Proj_GetProjectile(projecTile);
-    int                 spawnTile  = projecTile < 0 ? -projecTile : pProj->spawns;
-
-    if (spawnTile >= 0)
-    {
-        int spawned = A_Spawn(spriteNum, spawnTile);
-
-        if (projecTile >= 0)
-        {
-            if (pProj->sxrepeat > 4)
-                sprite[spawned].xrepeat = pProj->sxrepeat;
-
-            if (pProj->syrepeat > 4)
-                sprite[spawned].yrepeat = pProj->syrepeat;
-        }
-
-        A_SetHitData(spawned, hitData);
-    }
-}
-
-// <extra>: damage that this shotspark does
-static int Proj_InsertShotspark(const hitdata_t *hitData, int spriteNum, int projecTile, int sparkSize, int sparkAng, int damage)
-{
-    int returnSprite = A_InsertSprite(hitData->sect, hitData->x, hitData->y, hitData->z, SHOTSPARK1, -15,
-                                     sparkSize, sparkSize, sparkAng, 0, 0, spriteNum, 4);
-
-    sprite[returnSprite].extra = damage;
-    sprite[returnSprite].yvel  = projecTile;  // This is a hack to allow you to detect which weapon spawned a SHOTSPARK1
-
-    A_SetHitData(returnSprite, hitData);
-
-    return returnSprite;
-}
-
-int Proj_GetDamage(projectile_t const *pProj)
-{
-    Bassert(pProj);
-
-    int damage = pProj->extra;
-
-    if (pProj->extra_rand > 0)
-        damage += (krand() % pProj->extra_rand);
-
-    return damage;
-}
-
-static void Proj_MaybeAddSpread(int doSpread, int32_t *zvel, int *shootAng, int zRange, int angRange)
-{
-    if (doSpread)
-    {
-        // Ranges <= 1 mean no spread at all. A range of 1 calls krand() though.
-        if (zRange > 0)
-            *zvel += (zRange >> 1) - krand() % zRange;
-
-        if (angRange > 0)
-            *shootAng += (angRange >> 1) - krand() % angRange;
-    }
-}
-
-static int g_overrideShootZvel = 0;  // a boolean
-static int g_shootZvel;  // the actual zvel if the above is !=0
-
-static int A_GetShootZvel(int defaultZvel)
-{
-    return g_overrideShootZvel ? g_shootZvel : defaultZvel;
-}
-
-// Prepare hitscan weapon fired from player p.
-static void P_PreFireHitscan(int spriteNum, int playerNum, int projecTile, vec3_t *srcVect, int32_t *zvel, int *shootAng,
-                             int accurateAim, int doSpread)
-{
-    int angRange  = 32;
-    int zRange    = 256;
-    int aimSprite = GetAutoAimAng(spriteNum, playerNum, projecTile, 5 << 8, 0 + 1, srcVect, 256, zvel, shootAng);
-
-    auto const pPlayer = g_player[playerNum].ps;
-
-    Gv_SetVar(g_angRangeVarID, angRange, spriteNum, playerNum);
-    Gv_SetVar(g_zRangeVarID, zRange, spriteNum, playerNum);
-
-    VM_OnEvent(EVENT_GETSHOTRANGE, spriteNum, playerNum);
-
-    angRange = Gv_GetVar(g_angRangeVarID, spriteNum, playerNum);
-    zRange   = Gv_GetVar(g_zRangeVarID, spriteNum, playerNum);
-
-    if (accurateAim)
-    {
-        if (!pPlayer->auto_aim)
-        {
-            hitdata_t hitData;
-
-            *zvel = A_GetShootZvel(fix16_to_int(F16(100)-pPlayer->q16horiz-pPlayer->q16horizoff)<<5);
-
-            hitscan(srcVect, sprite[spriteNum].sectnum, sintable[(*shootAng + 512) & 2047],
-                    sintable[*shootAng & 2047], *zvel << 6, &hitData, CLIPMASK1);
-
-            if (hitData.sprite != -1)
-            {
-                int const statNumMap = ((1 << STAT_ACTOR) | (1 << STAT_ZOMBIEACTOR) | (1 << STAT_PLAYER) | (1 << STAT_DUMMYPLAYER));
-                int const statNum    = sprite[hitData.sprite].statnum;
-
-                if ((unsigned)statNum <= 30 && (statNumMap & (1 << statNum)))
-                    aimSprite = hitData.sprite;
-            }
-        }
-
-        if (aimSprite == -1)
-            goto notarget;
-    }
-    else
-    {
-        if (aimSprite == -1)  // no target
-        {
-notarget:
-            *zvel = fix16_to_int(F16(100)-pPlayer->q16horiz-pPlayer->q16horizoff)<<5;
-        }
-
-        Proj_MaybeAddSpread(doSpread, zvel, shootAng, zRange, angRange);
-    }
-
-    // ZOFFSET6 is added to this position at the same time as the player's pyoff in A_ShootWithZvel()
-    srcVect->z -= ZOFFSET6;
-}
-
-// Hitscan weapon fired from actor (sprite s);
-static void A_PreFireHitscan(const spritetype *pSprite, vec3_t * const srcVect, int32_t * const zvel, int * const shootAng, int const doSpread)
-{
-    int const  playerNum  = A_FindPlayer(pSprite, NULL);
-    auto const pPlayer    = g_player[playerNum].ps;
-    int const  playerDist = safeldist(pPlayer->i, pSprite);
-
-    *zvel = tabledivide32_noinline((pPlayer->pos.z - srcVect->z) << 8, playerDist);
-
-    srcVect->z -= ZOFFSET6;
-
-    if (pSprite->picnum == BOSS1)
-        *shootAng = getangle(pPlayer->pos.x - srcVect->x, pPlayer->pos.y - srcVect->y);
-
-    Proj_MaybeAddSpread(doSpread, zvel, shootAng, 256, 128 >> (uint8_t)(pSprite->picnum != BOSS1));
-}
-
-static int Proj_DoHitscan(int spriteNum, int32_t const cstatmask, const vec3_t * const srcVect, int zvel, int const shootAng, hitdata_t * const hitData)
-{
-    auto const pSprite = &sprite[spriteNum];
-
-    pSprite->cstat &= ~cstatmask;
-    zvel = A_GetShootZvel(zvel);
-    int16_t sectnum = pSprite->sectnum;
-    updatesector(srcVect->x, srcVect->y, &sectnum);
-    hitscan(srcVect, sectnum, sintable[(shootAng + 512) & 2047], sintable[shootAng & 2047], zvel << 6, hitData, CLIPMASK1);
-    pSprite->cstat |= cstatmask;
-
-    return (hitData->sect < 0);
-}
-
-static void Proj_DoRandDecalSize(int const spriteNum, int const projecTile)
-{
-    const projectile_t *const proj    = Proj_GetProjectile(projecTile);
-    auto const         pSprite = &sprite[spriteNum];
-
-    if (proj->workslike & PROJECTILE_RANDDECALSIZE)
-        pSprite->xrepeat = pSprite->yrepeat = clamp((krand() & proj->xrepeat), pSprite->yrepeat, pSprite->xrepeat);
-    else
-    {
-        pSprite->xrepeat = proj->xrepeat;
-        pSprite->yrepeat = proj->yrepeat;
-    }
-}
-
-static int SectorContainsSE13(int const sectNum)
-{
-    if (sectNum >= 0)
-    {
-        for (bssize_t SPRITES_OF_SECT(sectNum, i))
-        {
-            if (sprite[i].statnum == STAT_EFFECTOR && sprite[i].lotag == SE_13_EXPLOSIVE)
-                return 1;
-        }
-    }
-    return 0;
-}
-
-// Maybe handle bit 2 (swap wall bottoms).
-// (in that case walltype *hitwal may be stale)
-static inline void HandleHitWall(hitdata_t *hitData)
-{
-    auto const hitWall = (uwallptr_t)&wall[hitData->wall];
-
-    if ((hitWall->cstat & 2) && redwallp(hitWall) && (hitData->z >= sector[hitWall->nextsector].floorz))
-        hitData->wall = hitWall->nextwall;
-}
-
-// Maybe damage a ceiling or floor as the consequence of projectile impact.
-// Returns 1 if projectile hit a parallaxed ceiling.
-// NOTE: Compare with Proj_MaybeDamageCF() in actors.c
-static int Proj_MaybeDamageCF2(int const spriteNum, int const zvel, int const hitSect)
-{
-    Bassert(hitSect >= 0);
-
-    if (zvel < 0)
-    {
-        if (sector[hitSect].ceilingstat&1)
-            return 1;
-
-        Sect_DamageCeiling(spriteNum, hitSect);
-    }
-    else if (zvel > 0)
-    {
-        if (sector[hitSect].floorstat&1)
-        {
-            // Keep original Duke3D behavior: pass projectiles through
-            // parallaxed ceilings, but NOT through such floors.
-            return 0;
-        }
-
-        Sect_DamageFloor(spriteNum, hitSect);
-    }
-
-    return 0;
-}
-
-static void P_DoWeaponRumble(int playerNum)
-{
-    if (!joystick.hasRumble || !ud.config.controllerRumble)
+    if ((sp_warp = Warp(&pp->posx, &pp->posy, &pp->posz, &pp->cursectnum)) == NULL)
         return;
 
-    auto const pPlayer = g_player[playerNum].ps;
-
-    int const shoots = PWEAPON(playerNum, pPlayer->curr_weapon, Shoots);
-    int const base   = A_CheckSpriteTileFlags(shoots, SFLAG_PROJECTILE) ? Proj_GetProjectile(shoots)->extra : G_DefaultActorHealthForTile(shoots);
-    int const dmg    = clamp(base * PWEAPON(playerNum, pPlayer->curr_weapon, ShotsPerBurst), FF_WEAPON_DMG_MIN, FF_WEAPON_DMG_MAX);
-
-    I_AddForceFeedback((dmg << FF_WEAPON_DMG_SCALE), (dmg << FF_WEAPON_DMG_SCALE), max<int>(FF_WEAPON_MAX_TIME, dmg << FF_WEAPON_TIME_SCALE));
-}
-
-// Finish shooting hitscan weapon from player <p>. <k> is the inserted SHOTSPARK1.
-// * <spawnObject> is passed to Proj_MaybeSpawn()
-// * <decalTile> and <wallDamage> are for wall impact
-// * <wallDamage> is passed to A_DamageWall()
-// * <decalFlags> is for decals upon wall impact:
-//    1: handle random decal size (tile <atwith>)
-//    2: set cstat to wall-aligned + random x/y flip
-//
-// TODO: maybe split into 3 cases (hit neither wall nor sprite, hit sprite, hit wall)?
-
-static int P_PostFireHitscan(int playerNum, int const spriteNum, hitdata_t *const hitData, int const STANDALONE_UNUSED(spriteOwner),
-                             int const projecTile, int const zvel, int const spawnTile, int const decalTile, int const wallDamage,
-                             int const decalFlags)
-{
-#ifdef EDUKE32_STANDALONE
-    UNREFERENCED_PARAMETER(playerNum);
-    UNREFERENCED_CONST_PARAMETER(spriteOwner);
-#endif
-    if (hitData->wall == -1 && hitData->sprite == -1)
+    switch (SP_TAG3(sp_warp))
     {
-        if (Proj_MaybeDamageCF2(spriteNum, zvel, hitData->sect))
+    case 1:
+        DoPlayerTeleportToOffset(pp);
+        UpdatePlayerSprite(pp);
+        break;
+    default:
+        DoPlayerTeleportToSprite(pp, sp_warp);
+
+        PlaySound(DIGI_TELEPORT, &pp->posx, &pp->posy, &pp->posz, v3df_none);
+
+        DoPlayerResetMovement(pp);
+
+        u->WaitTics = 30;
+        //sp->shade =
+        //SET(sp->cstat, CSTAT_SPRITE_TRANSLUCENT);
+        DoPlayerBeginRun(pp);
+        //DoPlayerStand(pp);
+        pp->DoPlayerAction = DoPlayerTeleportPause;
+
+        NewStateGroup(pp->PlayerSprite, User[pp->PlayerSprite]->ActorActionSet->Stand);
+
+        UpdatePlayerSprite(pp);
+        DoSpawnTeleporterEffect(sp);
+
+        TRAVERSE_CONNECT(pnum)
         {
-            sprite[spriteNum].xrepeat = 0;
-            sprite[spriteNum].yrepeat = 0;
-            return -1;
-        }
-
-        Proj_MaybeSpawn(spriteNum, spawnTile, hitData);
-    }
-    else if (hitData->sprite >= 0)
-    {
-        A_DamageObject(hitData->sprite, spriteNum);
-
-#ifndef EDUKE32_STANDALONE
-        if (!FURY && sprite[hitData->sprite].picnum == APLAYER &&
-            (ud.ffire == 1 || (!GTFLAGS(GAMETYPE_PLAYERSFRIENDLY) && GTFLAGS(GAMETYPE_TDM) &&
-                               g_player[P_Get(hitData->sprite)].ps->team != g_player[P_Get(spriteOwner)].ps->team)))
-        {
-            int jibSprite = A_Spawn(spriteNum, JIBS6);
-
-            sprite[spriteNum].xrepeat = sprite[spriteNum].yrepeat = 0;
-            sprite[jibSprite].z += ZOFFSET6;
-            sprite[jibSprite].xvel    = 16;
-            sprite[jibSprite].xrepeat = sprite[jibSprite].yrepeat = 24;
-            sprite[jibSprite].ang += 64 - (krand() & 127);
-        }
-        else
-#endif
-        {
-            Proj_MaybeSpawn(spriteNum, spawnTile, hitData);
-        }
-#ifndef EDUKE32_STANDALONE
-        if (!FURY && playerNum >= 0 && CheckShootSwitchTile(sprite[hitData->sprite].picnum))
-        {
-            P_ActivateSwitch(playerNum, hitData->sprite, 1);
-            return -1;
-        }
-#endif
-    }
-    else if (hitData->wall >= 0)
-    {
-        auto const hitWall = (uwallptr_t)&wall[hitData->wall];
-
-        Proj_MaybeSpawn(spriteNum, spawnTile, hitData);
-
-        if (CheckDoorTile(hitWall->picnum) == 1)
-            goto SKIPBULLETHOLE;
-
-#ifndef EDUKE32_STANDALONE
-        if (!FURY && playerNum >= 0 && CheckShootSwitchTile(hitWall->picnum))
-        {
-            P_ActivateSwitch(playerNum, hitData->wall, 0);
-            return -1;
-        }
-#endif
-
-        if (hitWall->hitag != 0 || (hitWall->nextwall >= 0 && wall[hitWall->nextwall].hitag != 0))
-            goto SKIPBULLETHOLE;
-
-        if ((hitData->sect >= 0 && sector[hitData->sect].lotag == 0) &&
-            (hitWall->overpicnum != BIGFORCE && (hitWall->cstat & 16) == 0) &&
-            ((hitWall->nextsector >= 0 && sector[hitWall->nextsector].lotag == 0) || (hitWall->nextsector == -1 && sector[hitData->sect].lotag == 0)))
-        {
-            int decalSprite;
-
-            if (SectorContainsSE13(hitWall->nextsector))
-                goto SKIPBULLETHOLE;
-
-            for (SPRITES_OF(STAT_MISC, decalSprite))
-                if (sprite[decalSprite].picnum == decalTile && dist(&sprite[decalSprite], &sprite[spriteNum]) < (12 + (krand() & 7)))
-                    goto SKIPBULLETHOLE;
-
-            if (decalTile >= 0)
+            if (pnum != pp - Player)
             {
-                decalSprite = A_Spawn(spriteNum, decalTile);
+                PLAYERp npp = &Player[pnum];
 
-                auto const decal = &sprite[decalSprite];
-
-                A_SetHitData(decalSprite, hitData);
-
-                if (!A_CheckSpriteFlags(decalSprite, SFLAG_DECAL))
-                    actor[decalSprite].flags |= SFLAG_DECAL;
-
-                int32_t diffZ;
-                spriteheightofs(decalSprite, &diffZ, 0);
-
-                decal->z += diffZ >> 1;
-                decal->ang = (getangle(hitWall->x - wall[hitWall->point2].x, hitWall->y - wall[hitWall->point2].y) + 1536) & 2047;
-
-                if (decalFlags & 1)
-                    Proj_DoRandDecalSize(decalSprite, projecTile);
-
-                if (decalFlags & 2)
-                    decal->cstat = 16 + (krand() & (8 + 4));
-
-                A_SetSprite(decalSprite, CLIPMASK0);
-
-                // BULLETHOLE already adds itself to the deletion queue in
-                // A_Spawn(). However, some other tiles do as well.
-                if (decalTile != BULLETHOLE)
-                    A_AddToDeleteQueue(decalSprite);
+                // if someone already standing there
+                if (npp->cursectnum == pp->cursectnum)
+                {
+                    PlayerUpdateHealth(npp, -User[npp->PlayerSprite]->Health);  // Make sure he dies!
+                    // telefraged by teleporting player
+                    //PlayerCheckDeath(npp, npp->PlayerSprite);
+                    PlayerCheckDeath(npp, pp->PlayerSprite);
+                }
             }
         }
 
-SKIPBULLETHOLE:
-        HandleHitWall(hitData);
-        A_DamageWall(spriteNum, hitData->wall, hitData->xyz, wallDamage);
+        break;
     }
 
-    return 0;
+    u->ox = sp->x;
+    u->oy = sp->y;
+    u->oz = sp->z;
 }
 
-// Finish shooting hitscan weapon from actor (sprite <i>).
-static int A_PostFireHitscan(const hitdata_t *hitData, int const spriteNum, int const projecTile, int const zvel, int const shootAng,
-                             int const extra, int const spawnTile, int const wallDamage)
+void
+DoPlayerSetWadeDepth(PLAYERp pp)
 {
-    int const returnSprite = Proj_InsertShotspark(hitData, spriteNum, projecTile, 24, shootAng, extra);
+    SECTORp sectp;
 
-    if (hitData->sprite >= 0)
+    pp->WadeDepth = 0;
+
+    if (pp->lo_sectp)
+        sectp = pp->lo_sectp;
+    else
+        return;
+
+    if (TEST(sectp->extra, SECTFX_SINK))
     {
-        A_DamageObject(hitData->sprite, returnSprite);
-
-        if (sprite[hitData->sprite].picnum != APLAYER)
-            Proj_MaybeSpawn(returnSprite, spawnTile, hitData);
-        else
-            sprite[returnSprite].xrepeat = sprite[returnSprite].yrepeat = 0;
+        // make sure your even in the water
+        if (pp->posz + PLAYER_HEIGHT > pp->lo_sectp->floorz - Z(SectUser[pp->lo_sectp - sector]->depth))
+            pp->WadeDepth = SectUser[pp->lo_sectp - sector]->depth;
     }
-    else if (hitData->wall >= 0)
+}
+
+
+void
+DoPlayerHeight(PLAYERp pp)
+{
+    int diff;
+
+    diff = pp->posz - (pp->loz - PLAYER_HEIGHT);
+
+    pp->posz = pp->posz - (DIV4(diff) + DIV8(diff));
+}
+
+void
+DoPlayerJumpHeight(PLAYERp pp)
+{
+    if (pp->lo_sectp && TEST(pp->lo_sectp->extra, SECTFX_DYNAMIC_AREA))
     {
-        A_DamageWall(returnSprite, hitData->wall, hitData->xyz, wallDamage);
-        Proj_MaybeSpawn(returnSprite, spawnTile, hitData);
+        if (pp->posz + PLAYER_HEIGHT > pp->loz)
+        {
+            pp->posz = pp->loz - PLAYER_HEIGHT;
+            DoPlayerBeginRun(pp);
+        }
+    }
+}
+
+void
+DoPlayerCrawlHeight(PLAYERp pp)
+{
+    int diff;
+
+    diff = pp->posz - (pp->loz - PLAYER_CRAWL_HEIGHT);
+    pp->posz = pp->posz - (DIV4(diff) + DIV8(diff));
+}
+
+double scaleAdjustmentToInterval(double x);
+
+void
+DoPlayerTurn(PLAYERp pp, fix16_t *pq16ang, fix16_t q16angvel)
+{
+#define TURN_SHIFT 2
+
+    if (!PedanticMode && (pq16ang == &pp->q16ang))
+    {
+        SET(pp->Flags2, PF2_INPUT_CAN_TURN);
+        pp->q16ang = pp->input.q16ang;
+        if ((pp == &Player[myconnectindex]) || (pp == ppp)) // No coop view?
+            pp->oq16ang = pp->q16ang;
+        sprite[pp->PlayerSprite].ang = fix16_to_int(*pq16ang);
+        if (!Prediction)
+        {
+            if (pp->PlayerUnderSprite >= 0)
+                sprite[pp->PlayerUnderSprite].ang = fix16_to_int(*pq16ang);
+        }
+        return;
+    }
+
+    if (!TEST(pp->Flags, PF_TURN_180))
+    {
+        if (TEST_SYNC_KEY(pp, SK_TURN_180))
+        {
+            if (FLAG_KEY_PRESSED(pp, SK_TURN_180))
+            {
+                short delta_ang;
+
+                FLAG_KEY_RELEASE(pp, SK_TURN_180);
+
+                pp->turn180_target = NORM_ANGLE(fix16_to_int(*pq16ang) + 1024);
+
+                // make the first turn in the clockwise direction
+                // the rest will follow
+                delta_ang = GetDeltaAngle(pp->turn180_target, fix16_to_int(*pq16ang));
+                if (PedanticMode)
+                    *pq16ang = fix16_from_int(NORM_ANGLE(fix16_to_int(*pq16ang) + (labs(delta_ang) >> TURN_SHIFT)));
+                else
+                    // Add at least 1 unit to ensure the turn direction is clockwise
+                    *pq16ang = NORM_Q16ANGLE(fix16_sadd(*pq16ang,
+                                                        fix16_max(fix16_one,fix16_from_float(scaleAdjustmentToInterval(labs(delta_ang) >> TURN_SHIFT)))));
+
+                SET(pp->Flags, PF_TURN_180);
+            }
+        }
+        else
+        {
+            FLAG_KEY_RESET(pp, SK_TURN_180);
+        }
+    }
+
+    if (TEST(pp->Flags, PF_TURN_180))
+    {
+        short delta_ang;
+
+        delta_ang = GetDeltaAngle(pp->turn180_target, fix16_to_int(*pq16ang));
+        if (PedanticMode)
+            *pq16ang = fix16_from_int(NORM_ANGLE(fix16_to_int(*pq16ang) + (delta_ang >> TURN_SHIFT)));
+        else
+            *pq16ang = NORM_Q16ANGLE(fix16_sadd(*pq16ang, fix16_from_float(scaleAdjustmentToInterval(delta_ang >> TURN_SHIFT))));
+
+        if (pq16ang == &pp->q16ang)
+        {
+            sprite[pp->PlayerSprite].ang = fix16_to_int(*pq16ang);
+            if (!Prediction)
+            {
+                if (pp->PlayerUnderSprite >= 0)
+                    sprite[pp->PlayerUnderSprite].ang = fix16_to_int(*pq16ang);
+            }
+        }
+
+        // get new delta to see how close we are
+        delta_ang = GetDeltaAngle(pp->turn180_target, fix16_to_int(*pq16ang));
+
+        if (labs(delta_ang) < (3<<TURN_SHIFT))
+        {
+            *pq16ang = fix16_from_int(pp->turn180_target);
+            RESET(pp->Flags, PF_TURN_180);
+        }
+        else
+            return;
+    }
+
+    q16angvel = fix16_smul(q16angvel, fix16_from_int(PLAYER_TURN_SCALE));
+
+    if (q16angvel != 0)
+    {
+        // running is not handled here now
+        q16angvel += fix16_sdiv(q16angvel, fix16_from_int(4));
+
+        *pq16ang += fix16_sdiv(fix16_mul(q16angvel, fix16_from_int(synctics)), fix16_from_int(32));
+        *pq16ang = PedanticQ16AngleFloor(NORM_Q16ANGLE(*pq16ang));
+
+        // update players sprite angle
+        // NOTE: It's also updated in UpdatePlayerSprite, but needs to be
+        // here to cover
+        // all cases.
+        if (pq16ang == &pp->q16ang)
+        {
+            sprite[pp->PlayerSprite].ang = fix16_to_int(*pq16ang);
+            if (!Prediction)
+            {
+                if (pp->PlayerUnderSprite >= 0)
+                    sprite[pp->PlayerUnderSprite].ang = fix16_to_int(*pq16ang);
+            }
+        }
+
+    }
+}
+
+void
+DoPlayerTurnBoat(PLAYERp pp)
+{
+    int angvel;
+    int angslide;
+    SECTOR_OBJECTp sop = pp->sop;
+
+    if (sop->drive_angspeed)
+    {
+        int drive_oangvel = pp->drive_angvel;
+        pp->drive_angvel = mulscale16(fix16_to_int(pp->input.q16angvel), sop->drive_angspeed);
+
+        angslide = sop->drive_angslide;
+        pp->drive_angvel = (pp->drive_angvel + (drive_oangvel*(angslide-1)))/angslide;
+
+        angvel = pp->drive_angvel;
     }
     else
     {
-        if (Proj_MaybeDamageCF2(returnSprite, zvel, hitData->sect))
-        {
-            sprite[returnSprite].xrepeat = 0;
-            sprite[returnSprite].yrepeat = 0;
-        }
-        else Proj_MaybeSpawn(returnSprite, spawnTile, hitData);
+        angvel = fix16_to_int(pp->input.q16angvel) * PLAYER_TURN_SCALE;
+        angvel += angvel - DIV4(angvel);
+        angvel = DIV32(angvel * synctics);
     }
 
-    return returnSprite;
+    if (angvel != 0)
+    {
+        pp->camq16ang = pp->q16ang = fix16_from_int(NORM_ANGLE(fix16_to_int(pp->q16ang) + angvel));
+        sprite[pp->PlayerSprite].ang = fix16_to_int(pp->q16ang);
+    }
 }
 
-// Common "spawn blood?" predicate.
-// minzdiff: minimal "step" height for blood to be spawned
-static int Proj_CheckBlood(vec3_t const *const srcVect, hitdata_t const *const hitData, int const bloodRange, int const minZdiff)
+void
+DoPlayerTurnTank(PLAYERp pp, int z, int floor_dist)
 {
-    if (hitData->wall < 0 || hitData->sect < 0)
-        return 0;
+    int angvel;
+    SECTOR_OBJECTp sop = pp->sop;
 
-    auto const hitWall = (uwallptr_t)&wall[hitData->wall];
-
-    if ((FindDistance2D(srcVect->x - hitData->x, srcVect->y - hitData->y) < bloodRange)
-        && (hitWall->overpicnum != BIGFORCE && (hitWall->cstat & 16) == 0)
-        && (sector[hitData->sect].lotag == 0)
-        && (hitWall->nextsector < 0 || (sector[hitWall->nextsector].lotag == 0 && sector[hitData->sect].lotag == 0
-                                        && sector[hitData->sect].floorz - sector[hitWall->nextsector].floorz > minZdiff)))
-        return 1;
-
-    return 0;
-}
-
-static void Proj_HandleKnee(hitdata_t *const hitData, int const spriteNum, int const playerNum, int const projecTile, int const shootAng,
-                            const projectile_t *const proj, int const inserttile, int const randomDamage, int const spawnTile,
-                            int const soundNum)
-{
-    auto const pPlayer = playerNum >= 0 ? g_player[playerNum].ps : NULL;
-
-    int kneeSprite = A_InsertSprite(hitData->sect,hitData->x,hitData->y,hitData->z,
-                                    inserttile,-15,0,0,shootAng,32,0,spriteNum,4);
-
-    if (proj != NULL)
+    if (sop->drive_angspeed)
     {
-        // Custom projectiles.
-        SpriteProjectile[kneeSprite].workslike = Proj_GetProjectile(sprite[kneeSprite].picnum)->workslike;
-        sprite[kneeSprite].extra = proj->extra;
+        int angslide;
+
+        int drive_oangvel = pp->drive_angvel;
+        pp->drive_angvel = mulscale16(fix16_to_int(pp->input.q16angvel), sop->drive_angspeed);
+
+        angslide = sop->drive_angslide;
+        pp->drive_angvel = (pp->drive_angvel + (drive_oangvel*(angslide-1)))/angslide;
+
+        angvel = pp->drive_angvel;
+    }
+    else
+    {
+        angvel = DIV8(fix16_to_int(pp->input.q16angvel) * synctics);
     }
 
-    if (randomDamage > 0)
-        sprite[kneeSprite].extra += (krand()&randomDamage);
-
-    if (playerNum >= 0)
+    if (angvel != 0)
     {
-        if (spawnTile >= 0)
+        if (MultiClipTurn(pp, NORM_ANGLE(fix16_to_int(pp->q16ang) + angvel), z, floor_dist))
         {
-            int k = A_Spawn(kneeSprite, spawnTile);
-            sprite[k].z -= ZOFFSET3;
-            A_SetHitData(k, hitData);
-        }
-
-        if (soundNum >= 0)
-            A_PlaySound(soundNum, kneeSprite);
-    }
-
-    if (pPlayer != NULL && pPlayer->inv_amount[GET_STEROIDS] > 0 && pPlayer->inv_amount[GET_STEROIDS] < 400)
-        sprite[kneeSprite].extra += (pPlayer->max_player_health>>2);
-
-    int const dmg = clamp<int>(sprite[kneeSprite].extra, FF_WEAPON_DMG_MIN, FF_WEAPON_DMG_MAX);
-
-    if (hitData->sprite >= 0 && sprite[hitData->sprite].picnum != ACCESSSWITCH && sprite[hitData->sprite].picnum != ACCESSSWITCH2)
-    {
-        I_AddForceFeedback((dmg << FF_WEAPON_DMG_SCALE), (dmg << FF_WEAPON_DMG_SCALE), max<int>(FF_WEAPON_MAX_TIME, dmg << FF_WEAPON_TIME_SCALE));
-        A_DamageObject(hitData->sprite, kneeSprite);
-        if (playerNum >= 0)
-            P_ActivateSwitch(playerNum, hitData->sprite,1);
-    }
-    else if (hitData->wall >= 0)
-    {
-        I_AddForceFeedback((dmg << FF_WEAPON_DMG_SCALE), (dmg << FF_WEAPON_DMG_SCALE), max<int>(FF_WEAPON_MAX_TIME, dmg << FF_WEAPON_TIME_SCALE));
-        HandleHitWall(hitData);
-
-        if (wall[hitData->wall].picnum != ACCESSSWITCH && wall[hitData->wall].picnum != ACCESSSWITCH2)
-        {
-            A_DamageWall(kneeSprite, hitData->wall, hitData->xyz, projecTile);
-            if (playerNum >= 0)
-                P_ActivateSwitch(playerNum, hitData->wall,0);
+            pp->camq16ang = pp->q16ang = fix16_from_int(NORM_ANGLE(fix16_to_int(pp->q16ang) + angvel));
+            sprite[pp->PlayerSprite].ang = fix16_to_int(pp->q16ang);
         }
     }
 }
 
-#define MinibossScale(i, s) (((s)*sprite[i].yrepeat)/80)
-
-static int A_ShootCustom(int const spriteNum, int const projecTile, int shootAng, vec3_t * const startPos)
+void
+DoPlayerTurnTankRect(PLAYERp pp, int *x, int *y, int *ox, int *oy)
 {
-    /* Custom projectiles */
-    hitdata_t           hitData;
-    projectile_t *const pProj     = Proj_GetProjectile(projecTile);
-    auto const   pSprite   = &sprite[spriteNum];
-    int const           playerNum = (pSprite->picnum == APLAYER) ? P_GetP(pSprite) : -1;
-    auto const pPlayer   = playerNum >= 0 ? g_player[playerNum].ps : NULL;
+    int angvel;
+    SECTOR_OBJECTp sop = pp->sop;
 
-#ifdef POLYMER
-    if (videoGetRenderMode() == REND_POLYMER && pProj->flashcolor)
+    if (sop->drive_angspeed)
     {
-        vec3_t const offset = { -((sintable[(pSprite->ang+512)&2047])>>7), -((sintable[(pSprite->ang)&2047])>>7), PHEIGHT };
-        G_AddGameLight(spriteNum, pSprite->sectnum, offset, 8192, 0, 100, pProj->flashcolor, PR_LIGHT_PRIO_MAX_GAME);
-        practor[spriteNum].lightcount = 2;
+        int angslide;
+
+        int drive_oangvel = pp->drive_angvel;
+        pp->drive_angvel = mulscale16(fix16_to_int(pp->input.q16angvel), sop->drive_angspeed);
+
+        angslide = sop->drive_angslide;
+        pp->drive_angvel = (pp->drive_angvel + (drive_oangvel*(angslide-1)))/angslide;
+
+        angvel = pp->drive_angvel;
     }
-#endif // POLYMER
-
-    if (pProj->offset == 0)
-        pProj->offset = 1;
-
-    int     otherSprite = -1;
-    int32_t zvel = 0;
-
-    switch (pProj->workslike & PROJECTILE_TYPE_MASK)
+    else
     {
-    case PROJECTILE_HITSCAN:
-        if (!(pProj->workslike & PROJECTILE_NOSETOWNERSHADE) && pSprite->extra >= 0)
-            pSprite->shade = pProj->shade;
+        angvel = DIV8(fix16_to_int(pp->input.q16angvel) * synctics);
+    }
 
-        if (playerNum >= 0)
-            P_PreFireHitscan(spriteNum, playerNum, projecTile, startPos, &zvel, &shootAng,
-                             pProj->workslike & PROJECTILE_ACCURATE_AUTOAIM, !(pProj->workslike & PROJECTILE_ACCURATE));
-        else
-            A_PreFireHitscan(pSprite, startPos, &zvel, &shootAng, !(pProj->workslike & PROJECTILE_ACCURATE));
-
-        if (Proj_DoHitscan(spriteNum, (pProj->cstat >= 0) ? pProj->cstat : 256 + 1, startPos, zvel, shootAng, &hitData))
-            return -1;
-
-        if (pProj->range > 0 && klabs(startPos->x - hitData.x) + klabs(startPos->y - hitData.y) > pProj->range)
-            return -1;
-
-        if (pProj->trail >= 0)
-            A_HitscanProjTrail(startPos, &hitData.xyz, shootAng, projecTile, pSprite->sectnum);
-
-        if (pProj->workslike & PROJECTILE_WATERBUBBLES)
+    if (angvel != 0)
+    {
+        if (RectClipTurn(pp, NORM_ANGLE(fix16_to_int(pp->q16ang) + angvel), x, y, ox, oy))
         {
-            if ((krand() & 15) == 0 && sector[hitData.sect].lotag == ST_2_UNDERWATER)
-                Proj_DoWaterTracers(hitData.xyz, startPos, 8 - (ud.multimode >> 1), pSprite->sectnum);
+            pp->camq16ang = pp->q16ang = fix16_from_int(NORM_ANGLE(fix16_to_int(pp->q16ang) + angvel));
+            sprite[pp->PlayerSprite].ang = fix16_to_int(pp->q16ang);
         }
-
-        if (playerNum >= 0)
-        {
-            otherSprite = Proj_InsertShotspark(&hitData, spriteNum, projecTile, 10, shootAng, Proj_GetDamage(pProj));
-
-            if (P_PostFireHitscan(playerNum, otherSprite, &hitData, spriteNum, projecTile, zvel, projecTile, pProj->decal,
-                                  projecTile, 1 + 2) < 0)
-                return -1;
-        }
-        else
-        {
-            otherSprite =
-            A_PostFireHitscan(&hitData, spriteNum, projecTile, zvel, shootAng, Proj_GetDamage(pProj), projecTile, projecTile);
-        }
-
-        if ((krand() & 255) < 4 && pProj->isound >= 0)
-            S_PlaySound3D(pProj->isound, otherSprite, hitData.xyz);
-
-        return -1;
-
-    case PROJECTILE_RPG:
-        if (!(pProj->workslike & PROJECTILE_NOSETOWNERSHADE) && pSprite->extra >= 0)
-            pSprite->shade = pProj->shade;
-
-        if (pPlayer != NULL)
-        {
-            // NOTE: j is a SPRITE_INDEX
-            otherSprite = GetAutoAimAng(spriteNum, playerNum, projecTile, 8<<8, 0+2, startPos, pProj->vel, &zvel, &shootAng);
-
-            if (otherSprite < 0)
-                zvel = fix16_to_int(F16(100)-pPlayer->q16horiz-pPlayer->q16horizoff)*(pProj->vel/8);
-
-            if (pProj->sound >= 0)
-                A_PlaySound(pProj->sound, spriteNum);
-        }
-        else
-        {
-            if (!(pProj->workslike & PROJECTILE_NOAIM))
-            {
-                int const otherPlayer     = A_FindPlayer(pSprite, NULL);
-                int const otherPlayerDist = safeldist(g_player[otherPlayer].ps->i, pSprite);
-
-                shootAng = getangle(g_player[otherPlayer].ps->opos.x - startPos->x,
-                                      g_player[otherPlayer].ps->opos.y - startPos->y);
-
-                zvel = tabledivide32_noinline((g_player[otherPlayer].ps->opos.z - startPos->z) * pProj->vel, otherPlayerDist);
-
-                if (A_CheckEnemySprite(pSprite) && (AC_MOVFLAGS(pSprite, &actor[spriteNum]) & face_player_smart))
-                    shootAng = pSprite->ang + (krand() & 31) - 16;
-            }
-        }
-
-        if (numplayers > 1 && g_netClient) return -1;
-        else
-        {
-            // l may be a SPRITE_INDEX, see above
-            int const l = (playerNum >= 0 && otherSprite >= 0) ? otherSprite : -1;
-
-            zvel = A_GetShootZvel(zvel);
-            otherSprite = A_InsertSprite(pSprite->sectnum,
-                startPos->x + tabledivide32_noinline(sintable[(348 + shootAng + 512) & 2047], pProj->offset),
-                startPos->y + tabledivide32_noinline(sintable[(shootAng + 348) & 2047], pProj->offset),
-                startPos->z - (1 << 8), projecTile, 0, 14, 14, shootAng, pProj->vel, zvel, spriteNum, 4);
-
-            sprite[otherSprite].extra = Proj_GetDamage(pProj);
-
-            if (!(pProj->workslike & PROJECTILE_BOUNCESOFFWALLS))
-                sprite[otherSprite].yvel = l;  // NOT_BOUNCESOFFWALLS_YVEL
-            else
-            {
-                sprite[otherSprite].yvel = (pProj->bounces >= 1) ? pProj->bounces : g_numFreezeBounces;
-                sprite[otherSprite].zvel -= (2 << 4);
-            }
-
-            sprite[otherSprite].pal       = (pProj->pal >= 0) ? pProj->pal : 0;
-            sprite[otherSprite].xrepeat   = pProj->xrepeat;
-            sprite[otherSprite].yrepeat   = pProj->yrepeat;
-            sprite[otherSprite].cstat     = (pProj->cstat >= 0) ? pProj->cstat : 128;
-            sprite[otherSprite].clipdist  = (pProj->clipdist != 255) ? pProj->clipdist : 40;
-            SpriteProjectile[otherSprite] = *Proj_GetProjectile(sprite[otherSprite].picnum);
-
-            return otherSprite;
-        }
-
-    case PROJECTILE_KNEE:
-        if (playerNum >= 0)
-        {
-            zvel = fix16_to_int(F16(100) - pPlayer->q16horiz - pPlayer->q16horizoff) << 5;
-            startPos->z += (6 << 8);
-            shootAng += 15;
-        }
-        else if (!(pProj->workslike & PROJECTILE_NOAIM))
-        {
-            int32_t playerDist;
-            otherSprite = g_player[A_FindPlayer(pSprite, &playerDist)].ps->i;
-            zvel = tabledivide32_noinline((sprite[otherSprite].z - startPos->z) << 8, playerDist + 1);
-            shootAng = getangle(sprite[otherSprite].x - startPos->x, sprite[otherSprite].y - startPos->y);
-        }
-
-        Proj_DoHitscan(spriteNum, 0, startPos, zvel, shootAng, &hitData);
-
-        if (hitData.sect < 0) return -1;
-
-        if (pProj->range == 0)
-            pProj->range = 1024;
-
-        if (pProj->range > 0 && klabs(startPos->x - hitData.x) + klabs(startPos->y - hitData.y) > pProj->range)
-            return -1;
-
-        Proj_HandleKnee(&hitData, spriteNum, playerNum, projecTile, shootAng,
-                        pProj, projecTile, pProj->extra_rand, pProj->spawns, pProj->sound);
-
-        return -1;
-
-    case PROJECTILE_BLOOD:
-        shootAng += 64 - (krand() & 127);
-
-        if (playerNum < 0)
-            shootAng += 1024;
-
-        zvel = 1024 - (krand() & 2047);
-
-        Proj_DoHitscan(spriteNum, 0, startPos, zvel, shootAng, &hitData);
-
-        if (pProj->range == 0)
-            pProj->range = 1024;
-
-        if (Proj_CheckBlood(startPos, &hitData, pProj->range, mulscale3(pProj->yrepeat, tilesiz[pProj->decal].y) << 8))
-        {
-            uwallptr_t const hitWall = (uwallptr_t)&wall[hitData.wall];
-
-            if (FindDistance2D(hitWall->x - wall[hitWall->point2].x, hitWall->y - wall[hitWall->point2].y) >
-                (mulscale3(pProj->xrepeat + 8, tilesiz[pProj->decal].x)))
-            {
-                if (SectorContainsSE13(hitWall->nextsector))
-                    return -1;
-
-                if (hitWall->nextwall >= 0 && wall[hitWall->nextwall].hitag != 0)
-                    return -1;
-
-                if (hitWall->hitag == 0 && pProj->decal >= 0)
-                {
-                    otherSprite = A_Spawn(spriteNum, pProj->decal);
-
-                    A_SetHitData(otherSprite, &hitData);
-
-                    if (!A_CheckSpriteFlags(otherSprite, SFLAG_DECAL))
-                        actor[otherSprite].flags |= SFLAG_DECAL;
-
-                    sprite[otherSprite].ang = getangle(hitWall->x - wall[hitWall->point2].x,
-                        hitWall->y - wall[hitWall->point2].y) + 512;
-                    sprite[otherSprite].xyz = hitData.xyz;
-
-                    Proj_DoRandDecalSize(otherSprite, projecTile);
-
-                    sprite[otherSprite].z += sprite[otherSprite].yrepeat << 8;
-
-                    //                                sprite[spawned].cstat = 16+(krand()&12);
-                    sprite[otherSprite].cstat = 16;
-
-                    if (krand() & 1)
-                        sprite[otherSprite].cstat |= 4;
-
-                    if (krand() & 1)
-                        sprite[otherSprite].cstat |= 8;
-
-                    sprite[otherSprite].shade = sector[sprite[otherSprite].sectnum].floorshade;
-
-                    A_SetSprite(otherSprite, CLIPMASK0);
-                    A_AddToDeleteQueue(otherSprite);
-                    changespritestat(otherSprite, 5);
-                }
-            }
-        }
-
-        return -1;
-
-    default:
-        return -1;
     }
 }
 
-#ifndef EDUKE32_STANDALONE
-static int32_t A_ShootHardcoded(int spriteNum, int projecTile, int shootAng, vec3_t startPos,
-                                spritetype *pSprite, int const playerNum, DukePlayer_t * const pPlayer)
+void
+DoPlayerTurnTurret(PLAYERp pp)
 {
-    hitdata_t hitData;
-    int const spriteSectnum = pSprite->sectnum;
-    int32_t Zvel;
-    int vel;
+    int angvel;
+    short new_ang;
+    short diff;
+    SECTOR_OBJECTp sop = pp->sop;
+    SW_PACKET last_input;
+    int fifo_ndx;
 
-    switch (tileGetMapping(projecTile))
+    if (!Prediction)
     {
-        case BLOODSPLAT1__:
-        case BLOODSPLAT2__:
-        case BLOODSPLAT3__:
-        case BLOODSPLAT4__:
-            shootAng += 64 - (krand() & 127);
-            if (playerNum < 0)
-                shootAng += 1024;
-            Zvel = 1024 - (krand() & 2047);
-            fallthrough__;
-        case KNEE__:
-            if (projecTile == KNEE)
+        // this code looks at the fifo to get the last value for comparison
+        fifo_ndx = (movefifoplc-2) & (MOVEFIFOSIZ - 1);
+        last_input = pp->inputfifo[fifo_ndx];
+
+        if (pp->input.q16angvel && !last_input.q16angvel)
+            PlaySOsound(pp->sop->mid_sector, SO_DRIVE_SOUND);
+        else if (!pp->input.q16angvel && last_input.q16angvel)
+            PlaySOsound(pp->sop->mid_sector, SO_IDLE_SOUND);
+    }
+
+    if (sop->drive_angspeed)
+    {
+        int angslide;
+
+        int drive_oangvel = pp->drive_angvel;
+        pp->drive_angvel = mulscale16(fix16_to_int(pp->input.q16angvel), sop->drive_angspeed);
+
+        angslide = sop->drive_angslide;
+        pp->drive_angvel = (pp->drive_angvel + (drive_oangvel*(angslide-1)))/angslide;
+
+        angvel = pp->drive_angvel;
+    }
+    else
+    {
+        angvel = DIV4(fix16_to_int(pp->input.q16angvel) * synctics);
+    }
+
+    if (angvel != 0)
+    {
+        new_ang = NORM_ANGLE(fix16_to_int(pp->q16ang) + angvel);
+
+        if (sop->limit_ang_center >= 0)
+        {
+            diff = GetDeltaAngle(new_ang, sop->limit_ang_center);
+
+            if (labs(diff) >= sop->limit_ang_delta)
             {
-                if (playerNum >= 0)
-                {
-                    Zvel = fix16_to_int(F16(100) - pPlayer->q16horiz - pPlayer->q16horizoff) << 5;
-                    startPos.z += (6 << 8);
-                    shootAng += 15;
-                }
+                if (diff < 0)
+                    new_ang = sop->limit_ang_center - sop->limit_ang_delta;
                 else
-                {
-                    int32_t   playerDist;
-                    int const playerSprite = g_player[A_FindPlayer(pSprite, &playerDist)].ps->i;
-                    Zvel                   = tabledivide32_noinline((sprite[playerSprite].z - startPos.z) << 8, playerDist + 1);
-                    shootAng             = getangle(sprite[playerSprite].x - startPos.x, sprite[playerSprite].y - startPos.y);
-                }
+                    new_ang = sop->limit_ang_center + sop->limit_ang_delta;
+
             }
-
-            Proj_DoHitscan(spriteNum, 0, &startPos, Zvel, shootAng, &hitData);
-
-            if (projecTile >= BLOODSPLAT1 && projecTile <= BLOODSPLAT4)
-            {
-                if (Proj_CheckBlood(&startPos, &hitData, 1024, 16 << 8))
-                {
-                    uwallptr_t const hitwal = (uwallptr_t)&wall[hitData.wall];
-
-                    if (SectorContainsSE13(hitwal->nextsector))
-                        return -1;
-
-                    if (hitwal->nextwall >= 0 && wall[hitwal->nextwall].hitag != 0)
-                        return -1;
-
-                    if (hitwal->hitag == 0)
-                    {
-                        int const spawnedSprite = A_Spawn(spriteNum, projecTile);
-                        sprite[spawnedSprite].ang
-                        = (getangle(hitwal->x - wall[hitwal->point2].x, hitwal->y - wall[hitwal->point2].y) + 1536) & 2047;
-                        sprite[spawnedSprite].xyz = hitData.xyz;
-                        sprite[spawnedSprite].cstat |= (krand() & 4);
-                        A_SetSprite(spawnedSprite, CLIPMASK0);
-                        setsprite(spawnedSprite, &sprite[spawnedSprite].xyz);
-                        if (PN(spriteNum) == OOZFILTER || PN(spriteNum) == NEWBEAST)
-                            sprite[spawnedSprite].pal = 6;
-                    }
-                }
-
-                return -1;
-            }
-
-            if (hitData.sect < 0)
-                break;
-
-            if (klabs(startPos.x - hitData.x) + klabs(startPos.y - hitData.y) < 1024)
-                Proj_HandleKnee(&hitData, spriteNum, playerNum, projecTile, shootAng, NULL, KNEE, 7, SMALLSMOKE, KICK_HIT);
-            break;
-
-        case SHOTSPARK1__:
-        case SHOTGUN__:
-        case CHAINGUN__:
-        {
-            if (pSprite->extra >= 0)
-                pSprite->shade = -96;
-
-            if (playerNum >= 0)
-                P_PreFireHitscan(spriteNum, playerNum, projecTile, &startPos, &Zvel, &shootAng,
-                    projecTile == SHOTSPARK1__ && !WW2GI, 1);
-            else
-                A_PreFireHitscan(pSprite, &startPos, &Zvel, &shootAng, 1);
-
-            if (Proj_DoHitscan(spriteNum, 256 + 1, &startPos, Zvel, shootAng, &hitData))
-                return -1;
-
-            if ((krand() & 15) == 0 && sector[hitData.sect].lotag == ST_2_UNDERWATER)
-                Proj_DoWaterTracers(hitData.xyz, &startPos, 8 - (ud.multimode >> 1), pSprite->sectnum);
-
-            int spawnedSprite;
-
-            if (playerNum >= 0)
-            {
-                spawnedSprite = Proj_InsertShotspark(&hitData, spriteNum, projecTile, 10, shootAng, G_DefaultActorHealthForTile(projecTile) + (krand() % 6));
-
-                if (P_PostFireHitscan(playerNum, spawnedSprite, &hitData, spriteNum, projecTile, Zvel, -SMALLSMOKE, BULLETHOLE, SHOTSPARK1, 0) < 0)
-                    return -1;
-            }
-            else
-            {
-                spawnedSprite = A_PostFireHitscan(&hitData, spriteNum, projecTile, Zvel, shootAng, G_DefaultActorHealthForTile(projecTile), -SMALLSMOKE,
-                    SHOTSPARK1);
-            }
-
-            if ((krand() & 255) < 4)
-                S_PlaySound3D(PISTOL_RICOCHET, spawnedSprite, hitData.xyz);
-
-            return -1;
         }
 
-        case GROWSPARK__:
+        pp->camq16ang = pp->q16ang = fix16_from_int(new_ang);
+        sprite[pp->PlayerSprite].ang = fix16_to_int(pp->q16ang);
+    }
+}
+
+void SlipSlope(PLAYERp pp)
+{
+    short ang;
+    SECT_USERp sectu;
+
+    if (pp->cursectnum < 0 || !(sectu = SectUser[pp->cursectnum]) || !TEST(sectu->flags, SECTFU_SLIDE_SECTOR) || !TEST(sector[pp->cursectnum].floorstat, FLOOR_STAT_SLOPE))
+        return;
+
+    short wallptr = sector[pp->cursectnum].wallptr;
+
+    ang = getangle(wall[wall[wallptr].point2].x - wall[wallptr].x, wall[wall[wallptr].point2].y - wall[wallptr].y);
+
+    ang = NORM_ANGLE(ang + 512);
+
+    pp->xvect += mulscale(sintable[NORM_ANGLE(ang + 512)], sector[pp->cursectnum].floorheinum, sectu->speed);
+    pp->yvect += mulscale(sintable[ang], sector[pp->cursectnum].floorheinum, sectu->speed);
+}
+
+void
+PlayerAutoLook(PLAYERp pp)
+{
+    int x,y,k,j;
+    short tempsect;
+
+
+    if (!TEST(pp->Flags, PF_FLYING|PF_SWIMMING|PF_DIVING|PF_CLIMBING|PF_JUMPING|PF_FALLING))
+    {
+        if ((PedanticMode || !TEST(pp->Flags, PF_MOUSE_AIMING_ON))
+            && TEST(sector[pp->cursectnum].floorstat, FLOOR_STAT_SLOPE)) // If the floor is sloped
         {
-            if (playerNum >= 0)
-                P_PreFireHitscan(spriteNum, playerNum, projecTile, &startPos, &Zvel, &shootAng, 1, 1);
-            else
-                A_PreFireHitscan(pSprite, &startPos, &Zvel, &shootAng, 1);
+            // Get a point, 512 units ahead of player's position
+            x = pp->posx + (sintable[(fix16_to_int(pp->q16ang) + 512) & 2047] >> 5);
+            y = pp->posy + (sintable[fix16_to_int(pp->q16ang) & 2047] >> 5);
+            tempsect = pp->cursectnum;
+            COVERupdatesector(x, y, &tempsect);
 
-            if (Proj_DoHitscan(spriteNum, 256 + 1, &startPos, Zvel, shootAng, &hitData))
-                return -1;
-
-            int const otherSprite = A_InsertSprite(hitData.sect, hitData.x, hitData.y, hitData.z, GROWSPARK, -16, 28, 28,
-                                                   shootAng, 0, 0, spriteNum, 1);
-
-            sprite[otherSprite].pal = 2;
-            sprite[otherSprite].cstat |= 130;
-            sprite[otherSprite].xrepeat = sprite[otherSprite].yrepeat = 1;
-            A_SetHitData(otherSprite, &hitData);
-
-            if (hitData.wall == -1 && hitData.sprite == -1 && hitData.sect >= 0)
+            if (tempsect >= 0)              // If the new point is inside a valid
+            // sector...
             {
-                Proj_MaybeDamageCF2(otherSprite, Zvel, hitData.sect);
+                // Get the floorz as if the new (x,y) point was still in
+                // your sector
+                j = getflorzofslope(pp->cursectnum, pp->posx, pp->posy);
+                k = getflorzofslope(pp->cursectnum, x, y);
+
+                // If extended point is in same sector as you or the slopes
+                // of the sector of the extended point and your sector match
+                // closely (to avoid accidently looking straight out when
+                // you're at the edge of a sector line) then adjust horizon
+                // accordingly
+                if ((pp->cursectnum == tempsect) ||
+                    (klabs(getflorzofslope(tempsect, x, y) - k) <= (4 << 8)))
+                {
+                    if (PedanticMode)
+                        pp->q16horizoff += fix16_from_int((((j - k) * 160) >> 16));
+                    else
+                        pp->q16horizoff = fix16_sadd(pp->q16horizoff, fix16_from_float(scaleAdjustmentToInterval(mulscale16((j - k), 160))));
+		}
             }
-            else if (hitData.sprite >= 0)
-                A_DamageObject(hitData.sprite, otherSprite);
-            else if (hitData.wall >= 0 && wall[hitData.wall].picnum != ACCESSSWITCH && wall[hitData.wall].picnum != ACCESSSWITCH2)
-                A_DamageWall(otherSprite, hitData.wall, hitData.xyz, projecTile);
+        }
+    }
+
+    if (TEST(pp->Flags, PF_CLIMBING))
+    {
+        // tilt when climbing but you can't even really tell it
+        if (pp->q16horizoff < fix16_from_int(100))
+        {
+            if (PedanticMode)
+                pp->q16horizoff += fix16_from_int((((100 - fix16_to_int(pp->q16horizoff)) >> 3) + 1));
+            else
+                pp->q16horizoff = fix16_sadd(pp->q16horizoff, fix16_from_float(scaleAdjustmentToInterval(fix16_to_float(((fix16_from_int(100) - pp->q16horizoff) >> 3) + fix16_one))));
+	}
+    }
+    else
+    {
+        // Make q16horizoff grow towards 0 since q16horizoff is not modified when
+        // you're not on a slope
+        if (pp->q16horizoff > 0)
+        {
+            if (PedanticMode)
+                pp->q16horizoff -= fix16_from_int(((fix16_to_int(pp->q16horizoff) >> 3) + 1));
+            else
+            {
+                pp->q16horizoff = fix16_ssub(pp->q16horizoff, fix16_from_float(scaleAdjustmentToInterval(fix16_to_float((pp->q16horizoff >> 3) + fix16_one))));
+                pp->q16horizoff = fix16_max(pp->q16horizoff, 0);
+	    }
+	}
+        if (pp->q16horizoff < 0)
+        {
+            if (PedanticMode)
+                pp->q16horizoff += fix16_from_int((((fix16_to_int(-pp->q16horizoff)) >> 3) + 1));
+            else
+            {
+                pp->q16horizoff = fix16_sadd(pp->q16horizoff, fix16_from_float(scaleAdjustmentToInterval(fix16_to_float((-pp->q16horizoff >> 3) + fix16_one))));
+                pp->q16horizoff = fix16_min(pp->q16horizoff, 0);
+	    }
+	}
+    }
+}
+
+extern int PlaxCeilGlobZadjust, PlaxFloorGlobZadjust;
+void
+DoPlayerHorizon(PLAYERp pp, fix16_t *pq16horiz, fix16_t q16aimvel)
+{
+    int i;
+#define HORIZ_SPEED (16)
+
+//    //DSPRINTF(ds,"fix16_to_int(pp->q16horizoff), %d", fix16_to_int(pp->q16horizoff));
+//    MONO_PRINT(ds);
+
+    if (!PedanticMode && (pq16horiz == &pp->q16horiz))
+    {
+        SET(pp->Flags2, PF2_INPUT_CAN_AIM);
+        pp->q16horiz = pp->input.q16horiz;
+        if ((pp == &Player[myconnectindex]) || (pp == ppp)) // No coop view?
+            pp->oq16horiz = pp->q16horiz;
+        return;
+    }
+
+    PlayerAutoLook(pp);
+
+    if (q16aimvel)
+    {
+        pp->q16horizbase += q16aimvel;
+        SET(pp->Flags, PF_LOCK_HORIZ | PF_LOOKING);
+    }
+
+    if (TEST_SYNC_KEY(pp, SK_CENTER_VIEW))
+    {
+        if (PedanticMode)
+            pp->q16horizbase = fix16_from_int(100);
+        else if (pp->q16horizbase > fix16_from_int(100))
+        {
+	    pp->q16horizbase = fix16_ssub(pp->q16horizbase, fix16_from_float(scaleAdjustmentToInterval((HORIZ_SPEED*6))));
+            pp->q16horizbase = fix16_max(pp->q16horizbase, fix16_from_int(100));
+        }
+        else if (pp->q16horizbase < fix16_from_int(100))
+        {
+            pp->q16horizbase = fix16_sadd(pp->q16horizbase, fix16_from_float(scaleAdjustmentToInterval((HORIZ_SPEED*6))));
+            pp->q16horizbase = fix16_min(pp->q16horizbase, fix16_from_int(100));
+        }
+        *pq16horiz = pp->q16horizbase;
+        pp->q16horizoff = 0;
+    }
+
+    // this is the locked type
+    if (TEST_SYNC_KEY(pp, SK_SNAP_UP) || TEST_SYNC_KEY(pp, SK_SNAP_DOWN))
+    {
+        // set looking because player is manually looking
+        SET(pp->Flags, PF_LOCK_HORIZ | PF_LOOKING);
+
+        // adjust *pq16horiz negative
+        if (TEST_SYNC_KEY(pp, SK_SNAP_DOWN))
+        {
+            if (PedanticMode)
+		pp->q16horizbase -= fix16_from_int((HORIZ_SPEED/2));
+            else
+                pp->q16horizbase = fix16_ssub(pp->q16horizbase, fix16_from_float(scaleAdjustmentToInterval((HORIZ_SPEED/2))));
+	}
+
+        // adjust *pq16horiz positive
+        if (TEST_SYNC_KEY(pp, SK_SNAP_UP))
+        {
+            if (PedanticMode)
+                pp->q16horizbase += fix16_from_int((HORIZ_SPEED/2));
+            else
+                pp->q16horizbase = fix16_sadd(pp->q16horizbase, fix16_from_float(scaleAdjustmentToInterval((HORIZ_SPEED/2))));
+        }
+    }
+
+
+    // this is the unlocked type
+    if (TEST_SYNC_KEY(pp, SK_LOOK_UP) || TEST_SYNC_KEY(pp, SK_LOOK_DOWN))
+    {
+        RESET(pp->Flags, PF_LOCK_HORIZ);
+        SET(pp->Flags, PF_LOOKING);
+
+        // adjust *pq16horiz negative
+        if (TEST_SYNC_KEY(pp, SK_LOOK_DOWN))
+        {
+            if (PedanticMode)
+		pp->q16horizbase -= fix16_from_int(HORIZ_SPEED);
+            else
+                pp->q16horizbase = fix16_ssub(pp->q16horizbase, fix16_from_float(scaleAdjustmentToInterval(HORIZ_SPEED)));
+	}
+
+        // adjust *pq16horiz positive
+        if (TEST_SYNC_KEY(pp, SK_LOOK_UP))
+        {
+            if (PedanticMode)
+                pp->q16horizbase += fix16_from_int(HORIZ_SPEED);
+            else
+                pp->q16horizbase = fix16_sadd(pp->q16horizbase, fix16_from_float(scaleAdjustmentToInterval(HORIZ_SPEED)));
+	}
+    }
+
+
+    if (!TEST(pp->Flags, PF_LOCK_HORIZ))
+    {
+        if (!(TEST_SYNC_KEY(pp, SK_LOOK_UP) || TEST_SYNC_KEY(pp, SK_LOOK_DOWN)))
+        {
+            // not pressing the *pq16horiz keys
+            if (pp->q16horizbase != fix16_from_int(100))
+            {
+
+                // move *pq16horiz back to 100
+                for (i = 1; i; i--)
+                {
+                    // this formula does not work for *pq16horiz = 101-103
+                    if (PedanticMode)
+                        pp->q16horizbase += fix16_from_int(25 - (fix16_to_int(pp->q16horizbase) >> 2));
+                    else
+                        pp->q16horizbase = fix16_sadd(pp->q16horizbase, fix16_from_float(scaleAdjustmentToInterval(fix16_to_float(fix16_ssub(fix16_from_int(25), fix16_sdiv(pp->q16horizbase, fix16_from_int(4)))))));
+		}
+            }
+            else
+            {
+                // not looking anymore because *pq16horiz is back at 100
+                RESET(pp->Flags, PF_LOOKING);
+            }
+        }
+    }
+
+#if 1
+    // bound the base
+    pp->q16horizbase = fix16_max(pp->q16horizbase, fix16_from_int(PLAYER_HORIZ_MIN));
+    pp->q16horizbase = fix16_min(pp->q16horizbase, fix16_from_int(PLAYER_HORIZ_MAX));
+
+    // bound adjust q16horizoff
+    if (pp->q16horizbase + pp->q16horizoff < fix16_from_int(PLAYER_HORIZ_MIN))
+        pp->q16horizoff = fix16_from_int(PLAYER_HORIZ_MIN) - pp->q16horizbase;
+    else if (pp->q16horizbase + pp->q16horizoff > fix16_from_int(PLAYER_HORIZ_MAX))
+        pp->q16horizoff = fix16_from_int(PLAYER_HORIZ_MAX) - pp->q16horizbase;
+
+    ////DSPRINTF(ds,"base %d, off %d, base + off %d",fix16_to_int(pp->q16horizbase), fix16_to_int(pp->q16horizoff), fix16_to_int(pp->q16horizbase + pp->q16horizoff));
+    //MONO_PRINT(ds);
+
+    // add base and offsets
+    *pq16horiz = pp->q16horizbase + pp->q16horizoff;
+#else
+    if (pp->q16horizbase + pp->q16horizoff < fix16_from_int(PLAYER_HORIZ_MIN))
+        pp->q16horizbase += fix16_from_int(HORIZ_SPEED);
+    else if (pp->q16horizbase + pp->q16horizoff > fix16_from_int(PLAYER_HORIZ_MAX))
+        pp->q16horizbase -= HORIZ_SPEED;
+
+    *pq16horiz = pp->q16horizbase + pp->q16horizoff;
+#endif
+
+}
+
+void
+DoPlayerBob(PLAYERp pp)
+{
+    int dist;
+    int amt;
+
+    dist = 0;
+
+    dist = Distance(pp->posx, pp->posy, pp->oldposx, pp->oldposy);
+
+    if (dist > 512)
+        dist = 0;
+
+    // if running make a longer stride
+    if (TEST_SYNC_KEY(pp, SK_RUN) || TEST(pp->Flags, PF_LOCK_RUN))
+    {
+        //amt = 10;
+        amt = 12;
+        amt = mulscale16(amt, dist<<8);
+
+        dist = mulscale16(dist, 26000);
+        // controls how fast you move through the sin table
+        pp->bcnt += dist;
+
+        // wrap bcnt
+        pp->bcnt &= 2047;
+
+        // move pp->q16horiz up and down from 100 using sintable
+        //pp->bob_z = Z((8 * sintable[pp->bcnt]) >> 14);
+        pp->bob_z = mulscale14(Z(amt),sintable[pp->bcnt]);
+    }
+    else
+    {
+        amt = 5;
+        amt = mulscale16(amt, dist<<9);
+
+        dist = mulscale16(dist, 32000);
+        // controls how fast you move through the sin table
+        pp->bcnt += dist;
+
+        // wrap bcnt
+        pp->bcnt &= 2047;
+
+        // move pp->q16horiz up and down from 100 using sintable
+        //pp->bob_z = Z((4 * sintable[pp->bcnt]) >> 14);
+        pp->bob_z = mulscale14(Z(amt),sintable[pp->bcnt]);
+    }
+}
+
+void
+DoPlayerBeginRecoil(PLAYERp pp, short pix_amt)
+{
+#if 0
+    return;
+#else
+    SET(pp->Flags, PF_RECOIL);
+    SET(pp->Flags2, PF2_INPUT_CAN_TURN|PF2_INPUT_CAN_AIM);
+
+    pp->recoil_amt = pix_amt;
+    pp->recoil_speed = 80;
+    pp->recoil_ndx = 0;
+    pp->recoil_horizoff = 0;
+#endif
+}
+
+void
+DoPlayerRecoil(PLAYERp pp)
+{
+    // controls how fast you move through the sin table
+    pp->recoil_ndx += pp->recoil_speed;
+
+    if (sintable[pp->recoil_ndx] < 0)
+    {
+        RESET(pp->Flags, PF_RECOIL);
+        pp->recoil_horizoff = 0;
+        return;
+    }
+
+    // move pp->q16horiz up and down
+    pp->recoil_horizoff = ((pp->recoil_amt * sintable[pp->recoil_ndx]) >> 14);
+}
+
+
+
+// for wading
+void
+DoPlayerSpriteBob(PLAYERp pp, short player_height, short bob_amt, short bob_speed)
+{
+    SPRITEp sp = pp->SpriteP;
+
+    pp->bob_ndx = (pp->bob_ndx + (synctics << bob_speed)) & 2047;
+
+    pp->bob_amt = ((bob_amt * (int) sintable[pp->bob_ndx]) >> 14);
+
+    sp->z = (pp->posz + player_height) + pp->bob_amt;
+}
+
+void
+UpdatePlayerUnderSprite(PLAYERp pp)
+{
+    SPRITEp over_sp = pp->SpriteP;
+    USERp over_u = User[pp->PlayerSprite];
+
+    SPRITEp sp;
+    USERp u;
+    short SpriteNum;
+
+    int water_level_z, zdiff;
+    SWBOOL above_water, in_dive_area;
+
+    if (Prediction)
+        return;
+
+    ASSERT(over_sp);
+    ASSERT(over_u);
+
+    // dont bother spawning if you ain't really in the water
+    //water_level_z = sector[over_sp->sectnum].floorz - Z(pp->WadeDepth);
+    water_level_z = sector[over_sp->sectnum].floorz; // - Z(pp->WadeDepth);
+
+    // if not below water
+    above_water = (SPRITEp_BOS(over_sp) <= water_level_z);
+    in_dive_area = SpriteInDiveArea(over_sp);
+
+    // if not in dive area OR (in dive area AND above the water) - Kill it
+    if (!in_dive_area || (in_dive_area && above_water))
+    {
+
+        // if under sprite exists and not in a dive area - Kill it
+        if (pp->PlayerUnderSprite >= 0)
+        {
+            KillSprite(pp->PlayerUnderSprite);
+            pp->PlayerUnderSprite = -1;
+            pp->UnderSpriteP = NULL;
+        }
+        return;
+    }
+    else
+    {
+        // if in a dive area and a under sprite does not exist - create it
+        if (pp->PlayerUnderSprite < 0)
+        {
+            SpawnPlayerUnderSprite(pp);
+        }
+    }
+
+    sp = pp->UnderSpriteP;
+    u = User[pp->PlayerUnderSprite];
+
+    SpriteNum = pp->PlayerUnderSprite;
+
+    sp->x = over_sp->x;
+    sp->y = over_sp->y;
+    sp->z = over_sp->z;
+    changespritesect(SpriteNum, over_sp->sectnum);
+
+    SpriteWarpToUnderwater(sp);
+
+    // find z water level of the top sector
+    // diff between the bottom of the upper sprite and the water level
+    zdiff = SPRITEp_BOS(over_sp) - water_level_z;
+
+    // add diff to ceiling
+    sp->z = sector[sp->sectnum].ceilingz + zdiff;
+
+    u->State = over_u->State;
+    u->Rot = over_u->Rot;
+    u->StateStart = over_u->StateStart;
+
+    sp->picnum = over_sp->picnum;
+}
+
+
+void
+UpdatePlayerSprite(PLAYERp pp)
+{
+    SPRITEp sp = pp->SpriteP;
+
+    // Update sprite representation of player
+
+    sp->x = pp->posx;
+    sp->y = pp->posy;
+
+    // there are multiple death functions
+    if (TEST(pp->Flags, PF_DEAD))
+    {
+        changespritesect(pp->PlayerSprite, pp->cursectnum);
+        sprite[pp->PlayerSprite].ang = fix16_to_int(pp->q16ang);
+        UpdatePlayerUnderSprite(pp);
+        return;
+    }
+
+    if (pp->sop_control)
+    {
+        sp->z = sector[pp->cursectnum].floorz;
+        changespritesect(pp->PlayerSprite, pp->cursectnum);
+    }
+    else if (pp->DoPlayerAction == DoPlayerCrawl)
+    {
+        sp->z = pp->posz + PLAYER_CRAWL_HEIGHT;
+        changespritesect(pp->PlayerSprite, pp->cursectnum);
+    }
+#if 0
+    else if (pp->DoPlayerAction == DoPlayerSwim)
+    {
+        sp->z = pp->loz - Z(pp->WadeDepth) + Z(1);
+        changespritesect(pp->PlayerSprite, pp->cursectnum);
+    }
+#endif
+    else if (pp->DoPlayerAction == DoPlayerWade)
+    {
+        sp->z = pp->posz + PLAYER_HEIGHT;
+        changespritesect(pp->PlayerSprite, pp->cursectnum);
+
+        if (pp->WadeDepth > Z(29))
+        {
+            DoPlayerSpriteBob(pp, PLAYER_HEIGHT, Z(3), 3);
+        }
+    }
+    else if (pp->DoPlayerAction == DoPlayerDive)
+    {
+        // bobbing and sprite position taken care of in DoPlayerDive
+        sp->z = pp->posz + Z(10);
+        changespritesect(pp->PlayerSprite, pp->cursectnum);
+    }
+    else if (pp->DoPlayerAction == DoPlayerClimb)
+    {
+        sp->z = pp->posz + Z(17);
+
+        // move it forward a bit to look like its on the ladder
+        //sp->x += MOVEx(256+64, sp->ang);
+        //sp->y += MOVEy(256+64, sp->ang);
+
+        changespritesect(pp->PlayerSprite, pp->cursectnum);
+    }
+    else if (pp->DoPlayerAction == DoPlayerFly)
+    {
+        // sp->z = pp->posz + PLAYER_HEIGHT;
+        // bobbing and sprite position taken care of in DoPlayerFly
+        //sp->z = pp->posz + PLAYER_HEIGHT;
+        //DoPlayerSpriteBob(pp, PLAYER_HEIGHT, PLAYER_FLY_BOB_AMT, 3);
+        DoPlayerSpriteBob(pp, PLAYER_HEIGHT, Z(6), 3);
+        changespritesect(pp->PlayerSprite, pp->cursectnum);
+    }
+    else if (pp->DoPlayerAction == DoPlayerJump || pp->DoPlayerAction == DoPlayerFall || pp->DoPlayerAction == DoPlayerForceJump)
+    {
+        sp->z = pp->posz + PLAYER_HEIGHT;
+        changespritesect(pp->PlayerSprite, pp->cursectnum);
+    }
+    else if (pp->DoPlayerAction == DoPlayerTeleportPause)
+    {
+        sp->z = pp->posz + PLAYER_HEIGHT;
+        changespritesect(pp->PlayerSprite, pp->cursectnum);
+    }
+    else
+    {
+        sp->z = pp->loz;
+        changespritesect(pp->PlayerSprite, pp->cursectnum);
+    }
+
+    UpdatePlayerUnderSprite(pp);
+
+    sprite[pp->PlayerSprite].ang = fix16_to_int(pp->q16ang);
+}
+
+void
+DoPlayerZrange(PLAYERp pp)
+{
+    int ceilhit, florhit;
+    short bakcstat;
+
+    // Don't let you fall if you're just slightly over a cliff
+    // This function returns the highest and lowest z's
+    // for an entire box, NOT just a point.  -Useful for clipping
+    bakcstat = pp->SpriteP->cstat;
+    RESET(pp->SpriteP->cstat, CSTAT_SPRITE_BLOCK);
+    FAFgetzrange(pp->posx, pp->posy, pp->posz + Z(8), pp->cursectnum, &pp->hiz, &ceilhit, &pp->loz, &florhit, ((int)pp->SpriteP->clipdist<<2) - GETZRANGE_CLIP_ADJ, CLIPMASK_PLAYER);
+    pp->SpriteP->cstat = bakcstat;
+
+//  16384+sector (sector first touched) or
+//  49152+spritenum (sprite first touched)
+
+    pp->lo_sectp = pp->hi_sectp = NULL;
+    pp->lo_sp = pp->hi_sp = NULL;
+
+    if (TEST(ceilhit, 0xc000) == 49152)
+    {
+        pp->hi_sp = &sprite[ceilhit & 4095];
+    }
+    else
+    {
+        pp->hi_sectp = &sector[ceilhit & 4095];
+    }
+
+    if (TEST(florhit, 0xc000) == 49152)
+    {
+        pp->lo_sp = &sprite[florhit & 4095];
+
+        // prevent player from standing on Zombies
+        if (pp->lo_sp->statnum == STAT_ENEMY && User[pp->lo_sp - sprite]->ID == ZOMBIE_RUN_R0)
+        {
+            pp->lo_sectp = &sector[pp->lo_sp->sectnum];
+            pp->loz = pp->lo_sp->z;
+            pp->lo_sp = NULL;
+        }
+    }
+    else
+    {
+        pp->lo_sectp = &sector[florhit & 4095];
+    }
+}
+
+void
+DoPlayerSlide(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+    int push_ret;
+
+    if ((pp->slide_xvect|pp->slide_yvect) == 0)
+        return;
+
+    if (pp->sop)
+        return;
+
+    pp->slide_xvect  = mulscale16(pp->slide_xvect, PLAYER_SLIDE_FRICTION);
+    pp->slide_yvect  = mulscale16(pp->slide_yvect, PLAYER_SLIDE_FRICTION);
+
+    if (labs(pp->slide_xvect) < 12800 && labs(pp->slide_yvect) < 12800)
+        pp->slide_xvect = pp->slide_yvect = 0;
+
+    push_ret = pushmove(&pp->pos, &pp->cursectnum, ((int)pp->SpriteP->clipdist<<2), pp->ceiling_dist, pp->floor_dist, CLIPMASK_PLAYER);
+    if (push_ret < 0)
+    {
+        if (!TEST(pp->Flags, PF_DEAD))
+        {
+            PlayerUpdateHealth(pp, -u->Health);  // Make sure he dies!
+            PlayerCheckDeath(pp, -1);
+
+            if (TEST(pp->Flags, PF_DEAD))
+                return;
+        }
+        return;
+    }
+    clipmove(&pp->pos, &pp->cursectnum, pp->slide_xvect, pp->slide_yvect, ((int)pp->SpriteP->clipdist<<2), pp->ceiling_dist, pp->floor_dist, CLIPMASK_PLAYER);
+    PlayerCheckValidMove(pp);
+    push_ret = pushmove(&pp->pos, &pp->cursectnum, ((int)pp->SpriteP->clipdist<<2), pp->ceiling_dist, pp->floor_dist, CLIPMASK_PLAYER);
+    if (push_ret < 0)
+    {
+        if (!TEST(pp->Flags, PF_DEAD))
+        {
+            PlayerUpdateHealth(pp, -u->Health);  // Make sure he dies!
+            PlayerCheckDeath(pp, -1);
+
+            if (TEST(pp->Flags, PF_DEAD))
+                return;
+        }
+        return;
+    }
+}
+
+void PlayerMoveHitDebug(short ret)
+{
+    SPRITEp sp;
+
+    switch (TEST(ret, HIT_MASK))
+    {
+    case HIT_SPRITE:
+        sp = &sprite[NORM_SPRITE(ret)];
+        //DSPRINTF(ds, "Hit a Sprite %d, stat %d ", sp-sprite, (short)sp->statnum);
+        if (sp->statnum == STAT_MISSILE)
+        {
+            //DSPRINTF(ds, "Monster hit bullet %d, stat %d ", sp-sprite, (short)sp->statnum);
+        }
+        else
+        {
+            //DSPRINTF(ds, "Hit a Sprite %d, stat %d ", sp-sprite, (short)sp->statnum);
         }
         break;
-
-        case FIREBALL__:
-            if (!WORLDTOUR)
-                break;
-            fallthrough__;
-        case FIRELASER__:
-        case SPIT__:
-        case COOLEXPLOSION1__:
-        {
-            if (pSprite->extra >= 0)
-                pSprite->shade = -96;
-
-            switch (projecTile)
-            {
-                case SPIT__: vel = 292; break;
-                case COOLEXPLOSION1__:
-                    vel = (pSprite->picnum == BOSS2) ? 644 : 348;
-                    startPos.z -= (4 << 7);
-                    break;
-                case FIREBALL__:
-                    if (pSprite->picnum == BOSS5 || pSprite->picnum == BOSS5STAYPUT)
-                    {
-                        vel = 968;
-                        startPos.z += 0x1800;
-                        break;
-                    }
-                    fallthrough__;
-                case FIRELASER__:
-                default:
-                    vel = 840;
-                    startPos.z -= (4 << 7);
-                    break;
-            }
-
-            if (playerNum >= 0)
-            {
-                if (projecTile == FIREBALL)
-                {
-                    Zvel = fix16_to_int(F16(100) - pPlayer->q16horiz - pPlayer->q16horizoff) * 98;
-                    startPos.x += sintable[(348+shootAng+512)&2047]/448;
-                    startPos.y += sintable[(348+shootAng)&2047]/448;
-                    startPos.z += 0x300;
-                }
-                else if (GetAutoAimAng(spriteNum, playerNum, projecTile, -ZOFFSET4, 0, &startPos, vel, &Zvel, &shootAng) < 0)
-                    Zvel = fix16_to_int(F16(100) - pPlayer->q16horiz - pPlayer->q16horizoff) * 98;
-            }
-            else
-            {
-                int const otherPlayer = A_FindPlayer(pSprite, NULL);
-                shootAng           += 16 - (krand() & 31);
-                hitData.x         = safeldist(g_player[otherPlayer].ps->i, pSprite);
-                Zvel                  = tabledivide32_noinline((g_player[otherPlayer].ps->opos.z - startPos.z + (3 << 8)) * vel, hitData.x);
-            }
-
-            Zvel = A_GetShootZvel(Zvel);
-
-            int spriteSize = (playerNum >= 0) ? 7 : 18;
-
-            if (projecTile == SPIT)
-            {
-                spriteSize = 18;
-                startPos.z -= (10 << 8);
-            }
-
-            int const returnSprite = A_InsertSprite(spriteSectnum, startPos.x, startPos.y, startPos.z, projecTile, -127, spriteSize, spriteSize,
-                                                    shootAng, vel, Zvel, spriteNum, 4);
-
-            sprite[returnSprite].extra += (krand() & 7);
-
-            if (projecTile == COOLEXPLOSION1)
-            {
-                sprite[returnSprite].shade = 0;
-
-                if (PN(spriteNum) == BOSS2)
-                {
-                    int const saveXvel        = sprite[returnSprite].xvel;
-                    sprite[returnSprite].xvel = MinibossScale(spriteNum, 1024);
-                    A_SetSprite(returnSprite, CLIPMASK0);
-                    sprite[returnSprite].xvel = saveXvel;
-                    sprite[returnSprite].ang += 128 - (krand() & 255);
-                }
-            }
-            else if (projecTile == FIREBALL)
-            {
-                if (PN(spriteNum) == BOSS5 || PN(spriteNum) == BOSS5STAYPUT || playerNum >= 0)
-                {
-                    sprite[returnSprite].xrepeat = 40;
-                    sprite[returnSprite].yrepeat = 40;
-                }
-                sprite[returnSprite].yvel = playerNum;
-                //sprite[returnSprite].cstat |= 0x4000;
-            }
-
-            sprite[returnSprite].cstat    = 128;
-            sprite[returnSprite].clipdist = 4;
-
-            return returnSprite;
-        }
-
-        case FREEZEBLAST__:
-            startPos.z += (3 << 8);
-            fallthrough__;
-        case RPG__:
-        {
-            // XXX: "CODEDUP"
-            if (pSprite->extra >= 0)
-                pSprite->shade = -96;
-
-            vel = 644;
-
-            int j = -1;
-
-            if (playerNum >= 0)
-            {
-                // NOTE: j is a SPRITE_INDEX
-                j = GetAutoAimAng(spriteNum, playerNum, projecTile, ZOFFSET3, 0 + 2, &startPos, vel, &Zvel, &shootAng);
-
-                if (j < 0)
-                    Zvel = fix16_to_int(F16(100) - pPlayer->q16horiz - pPlayer->q16horizoff) * 81;
-
-                if (projecTile == RPG)
-                    A_PlaySound(RPG_SHOOT, spriteNum);
-            }
-            else
-            {
-                // NOTE: j is a player index
-                j          = A_FindPlayer(pSprite, NULL);
-                shootAng = getangle(g_player[j].ps->opos.x - startPos.x, g_player[j].ps->opos.y - startPos.y);
-                if (PN(spriteNum) == BOSS3)
-                    startPos.z -= MinibossScale(spriteNum, ZOFFSET5);
-                else if (PN(spriteNum) == BOSS2)
-                {
-                    vel += 128;
-                    startPos.z += MinibossScale(spriteNum, 24 << 8);
-                }
-
-                Zvel = tabledivide32_noinline((g_player[j].ps->opos.z - startPos.z) * vel, safeldist(g_player[j].ps->i, pSprite));
-
-                if (A_CheckEnemySprite(pSprite) && (AC_MOVFLAGS(pSprite, &actor[spriteNum]) & face_player_smart))
-                    shootAng = pSprite->ang + (krand() & 31) - 16;
-            }
-
-            if (numplayers > 1 && g_netClient)
-                return -1;
-
-            Zvel                   = A_GetShootZvel(Zvel);
-            int const returnSprite = A_InsertSprite(spriteSectnum, startPos.x + (sintable[(348 + shootAng + 512) & 2047] / 448),
-                                                    startPos.y + (sintable[(shootAng + 348) & 2047] / 448), startPos.z - (1 << 8),
-                                                    projecTile, 0, 14, 14, shootAng, vel, Zvel, spriteNum, 4);
-            auto const pReturn = &sprite[returnSprite];
-
-            pReturn->extra += (krand() & 7);
-            if (projecTile != FREEZEBLAST)
-                pReturn->yvel = (playerNum >= 0 && j >= 0) ? j : -1;  // RPG_YVEL
-            else
-            {
-                pReturn->yvel = g_numFreezeBounces;
-                pReturn->xrepeat >>= 1;
-                pReturn->yrepeat >>= 1;
-                pReturn->zvel -= (2 << 4);
-            }
-
-            if (playerNum == -1)
-            {
-                if (PN(spriteNum) == BOSS3)
-                {
-                    if (krand() & 1)
-                    {
-                        pReturn->x -= MinibossScale(spriteNum, sintable[shootAng & 2047] >> 6);
-                        pReturn->y -= MinibossScale(spriteNum, sintable[(shootAng + 1024 + 512) & 2047] >> 6);
-                        pReturn->ang -= MinibossScale(spriteNum, 8);
-                    }
-                    else
-                    {
-                        pReturn->x += MinibossScale(spriteNum, sintable[shootAng & 2047] >> 6);
-                        pReturn->y += MinibossScale(spriteNum, sintable[(shootAng + 1024 + 512) & 2047] >> 6);
-                        pReturn->ang += MinibossScale(spriteNum, 4);
-                    }
-                    pReturn->xrepeat = MinibossScale(spriteNum, 42);
-                    pReturn->yrepeat = MinibossScale(spriteNum, 42);
-                }
-                else if (PN(spriteNum) == BOSS2)
-                {
-                    pReturn->x -= MinibossScale(spriteNum, sintable[shootAng & 2047] / 56);
-                    pReturn->y -= MinibossScale(spriteNum, sintable[(shootAng + 1024 + 512) & 2047] / 56);
-                    pReturn->ang -= MinibossScale(spriteNum, 8) + (krand() & 255) - 128;
-                    pReturn->xrepeat = 24;
-                    pReturn->yrepeat = 24;
-                }
-                else if (projecTile != FREEZEBLAST)
-                {
-                    pReturn->xrepeat = 30;
-                    pReturn->yrepeat = 30;
-                    pReturn->extra >>= 2;
-                }
-            }
-            else if (PWEAPON(playerNum, g_player[playerNum].ps->curr_weapon, WorksLike) == DEVISTATOR_WEAPON)
-            {
-                pReturn->extra >>= 2;
-                pReturn->ang += 16 - (krand() & 31);
-                pReturn->zvel += 256 - (krand() & 511);
-
-                if (g_player[playerNum].ps->hbomb_hold_delay)
-                {
-                    pReturn->x -= sintable[shootAng & 2047] / 644;
-                    pReturn->y -= sintable[(shootAng + 1024 + 512) & 2047] / 644;
-                }
-                else
-                {
-                    pReturn->x += sintable[shootAng & 2047] >> 8;
-                    pReturn->y += sintable[(shootAng + 1024 + 512) & 2047] >> 8;
-                }
-                pReturn->xrepeat >>= 1;
-                pReturn->yrepeat >>= 1;
-            }
-
-            pReturn->cstat    = 128;
-            pReturn->clipdist = (projecTile == RPG) ? 4 : 40;
-
-            return returnSprite;
-        }
-
-        case HANDHOLDINGLASER__:
-        {
-            int const zOffset     = (playerNum >= 0) ? g_player[playerNum].ps->pyoff : 0;
-            Zvel                  = (playerNum >= 0) ? fix16_to_int(F16(100) - pPlayer->q16horiz - pPlayer->q16horizoff) * 32 : 0;
-
-            startPos.z -= zOffset;
-            Proj_DoHitscan(spriteNum, 0, &startPos, Zvel, shootAng, &hitData);
-            startPos.z += zOffset;
-
-            int placeMine = 0;
-            if (hitData.sprite >= 0)
-                break;
-
-            if (hitData.wall >= 0 && hitData.sect >= 0)
-            {
-                uint32_t xdiff_sq = (hitData.x - startPos.x) * (hitData.x - startPos.x);
-                uint32_t ydiff_sq = (hitData.y - startPos.y) * (hitData.y - startPos.y);
-                if (xdiff_sq + ydiff_sq < (290 * 290))
-                {
-                    // ST_2_UNDERWATER
-                    if (wall[hitData.wall].nextsector >= 0)
-                    {
-                        if (sector[wall[hitData.wall].nextsector].lotag <= 2 && sector[hitData.sect].lotag <= 2)
-                            placeMine = 1;
-                    }
-                    else if (sector[hitData.sect].lotag <= 2)
-                        placeMine = 1;
-                }
-
-            }
-            if (placeMine == 1)
-            {
-                int const tripBombMode = (playerNum < 0) ? 0 :
-                                                           Gv_GetVarByLabel("TRIPBOMB_CONTROL", TRIPBOMB_TRIPWIRE,
-                                                                            g_player[playerNum].ps->i, playerNum);
-                int const spawnedSprite = A_InsertSprite(hitData.sect, hitData.x, hitData.y, hitData.z, TRIPBOMB, -16, 4, 5,
-                                                         shootAng, 0, 0, spriteNum, 6);
-                if (tripBombMode & TRIPBOMB_TIMER)
-                {
-                    int32_t lLifetime = Gv_GetVarByLabel("STICKYBOMB_LIFETIME", NAM_GRENADE_LIFETIME, g_player[playerNum].ps->i, playerNum);
-                    int32_t lLifetimeVar
-                    = Gv_GetVarByLabel("STICKYBOMB_LIFETIME_VAR", NAM_GRENADE_LIFETIME_VAR, g_player[playerNum].ps->i, playerNum);
-                    // set timer.  blows up when at zero....
-                    actor[spawnedSprite].t_data[7] = lLifetime + mulscale14(krand(), lLifetimeVar) - lLifetimeVar;
-                    // TIMER_CONTROL
-                    actor[spawnedSprite].t_data[6] = 1;
-                }
-                else
-                    sprite[spawnedSprite].hitag = spawnedSprite;
-
-                A_PlaySound(LASERTRIP_ONWALL, spawnedSprite);
-                sprite[spawnedSprite].xvel = -20;
-                A_SetSprite(spawnedSprite, CLIPMASK0);
-                sprite[spawnedSprite].cstat = 16;
-
-                int const p2      = wall[hitData.wall].point2;
-                int const wallAng = getangle(wall[hitData.wall].x - wall[p2].x, wall[hitData.wall].y - wall[p2].y) - 512;
-
-                actor[spawnedSprite].t_data[5] = sprite[spawnedSprite].ang = wallAng;
-
-                return spawnedSprite;
-            }
-            return -1;
-        }
-
-        case BOUNCEMINE__:
-        case MORTER__:
-        {
-            if (pSprite->extra >= 0)
-                pSprite->shade = -96;
-
-            int const playerSprite = g_player[A_FindPlayer(pSprite, NULL)].ps->i;
-            int const playerDist   = ldist(&sprite[playerSprite], pSprite);
-
-            Zvel = -playerDist >> 1;
-
-            if (Zvel < -4096)
-                Zvel = -2048;
-
-            vel  = playerDist >> 4;
-            Zvel = A_GetShootZvel(Zvel);
-
-            A_InsertSprite(spriteSectnum, startPos.x + (sintable[(512 + shootAng + 512) & 2047] >> 8),
-                           startPos.y + (sintable[(shootAng + 512) & 2047] >> 8), startPos.z + (6 << 8), projecTile, -64, 32, 32,
-                           shootAng, vel, Zvel, spriteNum, 1);
-            break;
-        }
-
-        case SHRINKER__:
-        {
-            if (pSprite->extra >= 0)
-                pSprite->shade = -96;
-
-            if (playerNum >= 0)
-            {
-                if (NAM_WW2GI || GetAutoAimAng(spriteNum, playerNum, projecTile, ZOFFSET6, 0, &startPos, 768, &Zvel, &shootAng) < 0)
-                    Zvel = fix16_to_int(F16(100) - pPlayer->q16horiz - pPlayer->q16horizoff) * 98;
-            }
-            else if (pSprite->statnum != STAT_EFFECTOR)
-            {
-                int const otherPlayer = A_FindPlayer(pSprite, NULL);
-                Zvel                  = tabledivide32_noinline((g_player[otherPlayer].ps->opos.z - startPos.z) * 512,
-                                              safeldist(g_player[otherPlayer].ps->i, pSprite));
-            }
-            else
-                Zvel = 0;
-
-            Zvel                   = A_GetShootZvel(Zvel);
-            int const returnSprite = A_InsertSprite(spriteSectnum, startPos.x + (sintable[(512 + shootAng + 512) & 2047] >> 12),
-                                                    startPos.y + (sintable[(shootAng + 512) & 2047] >> 12), startPos.z + (2 << 8),
-                                                    SHRINKSPARK, -16, 28, 28, shootAng, 768, Zvel, spriteNum, 4);
-            sprite[returnSprite].cstat    = 128;
-            sprite[returnSprite].clipdist = 32;
-
-            return returnSprite;
-        }
-        case FLAMETHROWERFLAME__:
-        {
-            if (!WORLDTOUR)
-                break;
-
-            if (pSprite->extra >= 0) pSprite->shade = -96;
-            vel = 400;
-            int j, underwater;
-            if (playerNum >= 0)
-            {
-                Zvel = fix16_to_int(F16(100) - pPlayer->q16horiz - pPlayer->q16horizoff) * 81;
-                int xv = sprite[pPlayer->i].xvel;
-                if (xv)
-                {
-                    int ang = getangle(startPos.x-pPlayer->opos.x,startPos.y-pPlayer->opos.y);
-                    ang = 512-(1024-klabs(klabs(ang-shootAng)-1024));
-                    vel = 400+int(float(ang)*(1.f/512.f)*float(xv));
-                }
-                underwater = sector[pPlayer->cursectnum].lotag == ST_2_UNDERWATER;
-            }
-            else
-            {
-                // NOTE: j is a player index
-                j          = A_FindPlayer(pSprite, NULL);
-                shootAng = getangle(g_player[j].ps->opos.x - startPos.x, g_player[j].ps->opos.y - startPos.y);
-                if (PN(spriteNum) == BOSS3 || PN(spriteNum) == BOSS3STAYPUT)
-                    startPos.z -= MinibossScale(spriteNum, ZOFFSET5);
-                else if (PN(spriteNum) == BOSS5 || PN(spriteNum) == BOSS5STAYPUT)
-                {
-                    vel += 128;
-                    startPos.z += MinibossScale(spriteNum, 24 << 8);
-                }
-
-                Zvel = tabledivide32_noinline((g_player[j].ps->opos.z - startPos.z) * vel, safeldist(g_player[j].ps->i, pSprite));
-
-                if (A_CheckEnemySprite(pSprite) && (AC_MOVFLAGS(pSprite, &actor[spriteNum]) & face_player_smart))
-                    shootAng = pSprite->ang + (krand() & 31) - 16;
-                underwater = sector[pSprite->sectnum].lotag == 2;
-            }
-            if (underwater)
-            {
-                if ((krand() % 5) != 0)
-                    return -1;
-                j = A_Spawn(spriteNum, WATERBUBBLE);
-            }
-            else
-            {
-                j = A_Spawn(spriteNum, projecTile);
-                sprite[j].zvel = Zvel;
-                sprite[j].xvel = vel;
-            }
-            sprite[j].x = startPos.x+sintable[(shootAng+630)&2047]/448;
-            sprite[j].y = startPos.y+sintable[(shootAng+112)&2047]/448;
-            sprite[j].z = startPos.z-0x100;
-            sprite[j].cstat = 128;
-            sprite[j].ang = shootAng;
-            sprite[j].xrepeat = sprite[j].yrepeat = 2;
-            sprite[j].clipdist = 40;
-            sprite[j].owner = spriteNum;
-            sprite[j].yvel = playerNum;
-            if (playerNum == -1 && (sprite[spriteNum].picnum == BOSS5 || sprite[spriteNum].picnum == BOSS5STAYPUT))
-            {
-                sprite[j].xrepeat = sprite[j].yrepeat = 10;
-                sprite[j].x -= sintable[shootAng&2047]/56;
-                sprite[j].y -= sintable[(shootAng-512)&2047]/56;
-            }
-            return j;
-        }
-        case FIREFLY__:
-        {
-            if (!WORLDTOUR)
-                break;
-
-            int j = A_Spawn(spriteNum, projecTile);
-            sprite[j].xyz = startPos;
-            sprite[j].ang = shootAng;
-            sprite[j].xvel = 500;
-            sprite[j].zvel = 0;
-            return j;
-        }
+    case HIT_WALL:
+        //DSPRINTF(ds, "Hit a Wall %d    ", NORM_WALL(ret));
+        break;
+    case HIT_SECTOR:
+        //DSPRINTF(ds, "Hit a Sector %d  ", NORM_SECTOR(ret));
+        break;
     }
 
-    return -1;
-}
-#endif
-
-int A_ShootWithZvel(int const spriteNum, int const projecTile, int const forceZvel)
-{
-    Bassert(projecTile >= 0);
-
-    auto const pSprite   = &sprite[spriteNum];
-    int const  playerNum = (pSprite->picnum == APLAYER) ? P_GetP(pSprite) : -1;
-    auto const pPlayer   = playerNum >= 0 ? g_player[playerNum].ps : NULL;
-
-    if (forceZvel != SHOOT_HARDCODED_ZVEL)
-    {
-        g_overrideShootZvel = 1;
-        g_shootZvel = forceZvel;
-    }
-    else
-        g_overrideShootZvel = 0;
-
-    int    shootAng;
-    vec3_t startPos;
-
-    if (pPlayer != NULL)
-    {
-        startPos = pPlayer->pos;
-        startPos.z += pPlayer->pyoff + ZOFFSET6;
-        shootAng = fix16_to_int(pPlayer->q16ang);
-
-        pPlayer->crack_time = PCRACKTIME;
-    }
-    else
-    {
-        shootAng = pSprite->ang;
-        startPos = pSprite->xyz;
-        startPos.z -= (((pSprite->yrepeat * tilesiz[pSprite->picnum].y)<<1) - ZOFFSET6);
-
-        if (pSprite->picnum != ROTATEGUN)
-        {
-            startPos.z -= (7<<8);
-
-            if (A_CheckEnemySprite(pSprite) && PN(spriteNum) != COMMANDER)
-            {
-                startPos.x += (sintable[(shootAng+1024+96)&2047]>>7);
-                startPos.y += (sintable[(shootAng+512+96)&2047]>>7);
-            }
-        }
-
-#ifndef EDUKE32_STANDALONE
-#ifdef POLYMER
-        switch (tileGetMapping(projecTile))
-        {
-            case FIRELASER__:
-            case SHOTGUN__:
-            case SHOTSPARK1__:
-            case CHAINGUN__:
-            case RPG__:
-            case MORTER__:
-                {
-                    vec3_t const offset = { -((sintable[(pSprite->ang+512)&2047])>>7), -((sintable[(pSprite->ang)&2047])>>7), PHEIGHT };
-                    G_AddGameLight(spriteNum, pSprite->sectnum, offset, 8192, 0, 100, 255 + (95 << 8), PR_LIGHT_PRIO_MAX_GAME);
-                    practor[spriteNum].lightcount = 2;
-                }
-
-                break;
-            }
-#endif // POLYMER
-#endif // !EDUKE32_STANDALONE
-    }
-
-#ifdef EDUKE32_STANDALONE
-    return A_CheckSpriteTileFlags(projecTile, SFLAG_PROJECTILE) ? A_ShootCustom(spriteNum, projecTile, shootAng, &startPos) : -1;
-#else
-    return A_CheckSpriteTileFlags(projecTile, SFLAG_PROJECTILE)
-           ? A_ShootCustom(spriteNum, projecTile, shootAng, &startPos)
-           : !FURY ? A_ShootHardcoded(spriteNum, projecTile, shootAng, startPos, pSprite, playerNum, pPlayer) : -1;
-#endif
+    MONO_PRINT(ds);
 }
 
-
-//////////////////// HUD WEAPON / MISC. DISPLAY CODE ////////////////////
-
-#ifndef EDUKE32_STANDALONE
-static void P_DisplaySpit(void)
+void PlayerCheckValidMove(PLAYERp pp)
 {
-    auto const pPlayer     = g_player[screenpeek].ps;
-    int const  loogCounter = pPlayer->loogcnt;
+    if (pp->cursectnum == -1)
+    {
+        static int count = 0;
 
-    if (loogCounter == 0)
+#if DEBUG
+        //DSPRINTF(ds,"PROBLEM!!!!! Player %d is not in a sector", pp - Player);
+        MONO_PRINT(ds);
+#endif
+
+        pp->posx = pp->oldposx;
+        pp->posy = pp->oldposy;
+        pp->posz = pp->oldposz;
+        pp->cursectnum = pp->lastcursectnum;
+
+        // if stuck here for more than 10 seconds
+        if (count++ > 40 * 10)
+        {
+            ASSERT(TRUE == FALSE);
+        }
+    }
+}
+
+void
+MoveScrollMode2D(PLAYERp pp)
+{
+#define TURBOTURNTIME (120/8)
+#define NORMALTURN   (12+6)
+#define RUNTURN      (28)
+#define PREAMBLETURN 3
+#define NORMALKEYMOVE 35
+#define MAXVEL       ((NORMALKEYMOVE*2)+10)
+#define MAXSVEL      ((NORMALKEYMOVE*2)+10)
+#define MAXANGVEL    100
+
+    ControlInfo scrl_input;
+    int32_t keymove;
+    int32_t momx, momy;
+    static int mfvel=0, mfsvel=0;
+    extern SWBOOL HelpInputMode, ScrollMode2D;
+
+
+    CONTROL_GetInput(&scrl_input);
+
+    mfsvel = mfvel = 0;
+
+    if (MenuInputMode || UsingMenus)
         return;
 
-    if (VM_OnEvent(EVENT_DISPLAYSPIT, pPlayer->i, screenpeek) != 0)
-        return;
-
-    int const rotY  = loogCounter << 2;
-    int const loogs = min<int>(pPlayer->numloogs, ARRAY_SIZE(pPlayer->loogie));
-
-    for (int i=0; i < loogs; i++)
+    // Recenter view if told
+    if (BUTTON(gamefunc_Center_View))
     {
-        int const rotAng = klabs(sintable[((loogCounter + i) << 5) & 2047]) >> 5;
-        int const rotZoom  = 4096 + ((loogCounter + i) << 9);
-        int const rotX     = (-fix16_to_int(g_player[screenpeek].input.q16avel) >> 1) + (sintable[((loogCounter + i) << 6) & 2047] >> 10);
-
-        rotatesprite_fs_id((pPlayer->loogie[i].x + rotX) << 16, (200 + pPlayer->loogie[i].y - rotY) << 16, rotZoom - (i << 8),
-                        256 - rotAng, LOOGIE, 0, 0, 2, W_LOOGIE + i);
-    }
-}
-#endif
-
-int P_GetHudPal(const DukePlayer_t *p)
-{
-    if (sprite[p->i].pal == 1)
-        return 1;
-
-    if (p->cursectnum >= 0)
-    {
-        int const hudPal = sector[p->cursectnum].floorpal;
-        if (!g_noFloorPal[hudPal])
-            return hudPal;
+        Follow_posx = pp->posx;
+        Follow_posy = pp->posy;
     }
 
-    return 0;
-}
-
-int P_GetKneePal(DukePlayer_t const * pPlayer)
-{
-    return P_GetKneePal(pPlayer, P_GetHudPal(pPlayer));
-}
-
-int P_GetKneePal(DukePlayer_t const * pPlayer, int const hudPal)
-{
-    return hudPal == 0 ? pPlayer->palookup : hudPal;
-}
-
-int P_GetOverheadPal(DukePlayer_t const * pPlayer)
-{
-    return sprite[pPlayer->i].pal;
-}
-
-static int P_DisplayFist(int const fistShade)
-{
-    DukePlayer_t const *const pPlayer = g_player[screenpeek].ps;
-    int fistInc = pPlayer->fist_incs;
-
-    if (fistInc > 32)
-        fistInc = 32;
-
-    if (fistInc <= 0)
-        return 0;
-
-    switch (VM_OnEvent(EVENT_DISPLAYFIST, pPlayer->i, screenpeek))
+    // Toggle follow map mode on/off
+    if (BUTTON(gamefunc_Map_Follow_Mode) && !BUTTONHELD(gamefunc_Map_Follow_Mode))
     {
-        case 1: return 1;
-        case -1: return 0;
+        ScrollMode2D = !ScrollMode2D;
+        // Reset coords
+        Follow_posx = pp->posx;
+        Follow_posy = pp->posy;
     }
-
-    int const baseX       = fix16_to_int(g_player[screenpeek].input.q16avel) >> 5;
-    int const baseY       = klabs(pPlayer->look_ang) / 9;
-    int const fistX       = 222 + baseX - fistInc;
-    int const fistY       = 194 + baseY + (sintable[((6 + fistInc) << 7) & 2047] >> 9);
-    int const fistZoom    = clamp(65536 - (sintable[(512 + (fistInc << 6)) & 2047] << 2), 40920, 90612);
-    int const fistPal     = P_GetHudPal(pPlayer);
-    int       wx[2]       = { windowxy1.x, windowxy2.x };
-    int const wy[2]       = { windowxy1.y, windowxy2.y };
-
-#ifdef SPLITSCREEN_MOD_HACKS
-    // XXX: this is outdated, doesn't handle above/below split.
-    if (g_fakeMultiMode==2)
-        wx[(g_snum==0)] = (wx[0]+wx[1])/2+1;
-#endif
-
-    guniqhudid = W_FIST;
-    rotatesprite(fistX << 16, fistY << 16, fistZoom, 0, FIST, fistShade, fistPal, 2 | RS_LERP, wx[0],wy[0], wx[1],wy[1]);
-    guniqhudid = 0;
-
-    return 1;
-}
-
-#define DRAWEAP_CENTER 262144
-#define weapsc(sc) scale(sc, ud.weaponscale, 100)
-
-static int32_t g_dts_yadd;
-
-static void G_DrawTileScaled(int drawX, int drawY, int tileNum, int drawShade, int drawBits, int drawPal, int uniqueID = 0)
-{
-    int32_t wx[2] = { windowxy1.x, windowxy2.x };
-    int32_t wy[2] = { windowxy1.y, windowxy2.y };
-
-    int drawYOffset = 0;
-    int drawXOffset = 192<<16;
-    int const restoreid = guniqhudid;
-
-    guniqhudid = uniqueID;
-
-    switch (hudweap.cur)
-    {
-        case DEVISTATOR_WEAPON:
-        case TRIPBOMB_WEAPON:
-            drawXOffset = 160<<16;
-            break;
-        default:
-            if (drawBits & DRAWEAP_CENTER)
-            {
-                drawXOffset = 160<<16;
-                drawBits &= ~DRAWEAP_CENTER;
-            }
-            break;
-    }
-
-    // bit 4 means "flip x" for G_DrawTileScaled
-    int const drawAng = (drawBits & 4) ? 1024 : 0;
-
-#ifdef SPLITSCREEN_MOD_HACKS
-    if (g_fakeMultiMode==2)
-    {
-        int const sideBySide = (ud.screen_size!=0);
-
-        // splitscreen HACK
-        drawBits &= ~(1024|512|256);
-        if (sideBySide)
-        {
-            drawBits &= ~8;
-            wx[(g_snum==0)] = (wx[0]+wx[1])/2 + 2;
-        }
-        else
-        {
-            drawBits |= 8;
-            if (g_snum==0)
-                drawYOffset = -(100<<16);
-            wy[(g_snum==0)] = (wy[0]+wy[1])/2 + 2;
-        }
-    }
-#endif
-
-#ifdef USE_OPENGL
-    if (videoGetRenderMode() >= REND_POLYMOST && usemodels && md_tilehasmodel(tileNum,drawPal) >= 0)
-        drawYOffset += (224<<16)-weapsc(224<<16);
-#endif
-    rotatesprite(weapsc(drawX<<16) + (drawXOffset-weapsc(drawXOffset)),
-                 weapsc((drawY<<16) + g_dts_yadd) + ((200<<16)-weapsc(200<<16)) + drawYOffset,
-                 weapsc(65536L),drawAng,tileNum,drawShade,drawPal,(2|drawBits),
-                 wx[0],wy[0], wx[1],wy[1]);
-    guniqhudid = restoreid;
-}
-
-#ifndef EDUKE32_STANDALONE
-static void G_DrawWeaponTile(int weaponX, int weaponY, int weaponTile, int weaponShade, int weaponBits, int weaponPal, int uniqueID = 0)
-{
-    static int shadef = 0;
-    static int palf = 0;
-
-    // basic fading between player weapon shades
-    if (shadef != weaponShade && (!weaponPal || palf == weaponPal))
-    {
-        shadef += (weaponShade - shadef) >> 2;
-
-        if (!((weaponShade - shadef) >> 2))
-            shadef = logapproach(shadef, weaponShade);
-    }
-    else
-        shadef = weaponShade;
-
-    palf = weaponPal;
-
-#ifdef USE_OPENGL
-    if (videoGetRenderMode() >= REND_POLYMOST)
-    {
-        if (uniqueID == W_CHAINGUN_TOP)
-        {
-            if (!usemodels || md_tilehasmodel(weaponTile, weaponPal) < 0)
-            {
-                // HACK: Draw the upper part of the chaingun two screen
-                // pixels (not texels; multiplied by weapon scale) lower
-                // first, preventing ugly horizontal seam.
-                g_dts_yadd = tabledivide32_noinline(65536 * 2 * 200, ydim);
-                G_DrawTileScaled(weaponX, weaponY, weaponTile, shadef, weaponBits, weaponPal, W_CHAINGUN_HACK);
-                g_dts_yadd = 0;
-            }
-        }
-    }
-#endif
-
-    G_DrawTileScaled(weaponX, weaponY, weaponTile, shadef, weaponBits, weaponPal, uniqueID);
-}
-#endif
-
-static inline void G_DrawWeaponTileUnfaded(int weaponX, int weaponY, int weaponTile, int weaponShade, int weaponBits, int p, int uniqueID = 0)
-{
-    G_DrawTileScaled(weaponX, weaponY, weaponTile, weaponShade, weaponBits, p, uniqueID); // skip G_DrawWeaponTile
-}
-
-static vec2_t P_GetDisplayBaseXY(DukePlayer_t const * const pPlayer)
-{
-    return vec2_t
-    {
-        (fix16_to_int(g_player[screenpeek].input.q16avel) >> 5) - (pPlayer->look_ang >> 1),
-        (klabs(pPlayer->look_ang) / 9) - (pPlayer->hard_landing << 3) - (fix16_to_int(pPlayer->q16horiz - pPlayer->q16horizoff) >> 4),
-    };
-}
-
-static int P_DisplayKnee(int kneeShade)
-{
-    static int8_t const       knee_y[] = { 0, -8, -16, -32, -64, -84, -108, -108, -108, -72, -32, -8 };
-    auto const ps = g_player[screenpeek].ps;
-
-    if (ps->knee_incs == 0)
-        return 0;
-
-    switch (VM_OnEvent(EVENT_DISPLAYKNEE, ps->i, screenpeek))
-    {
-        case 1: return 1;
-        case -1: return 0;
-    }
-
-    if (ps->knee_incs >= ARRAY_SIZE(knee_y) || sprite[ps->i].extra <= 0)
-        return 0;
-
-    auto const base   = P_GetDisplayBaseXY(ps);
-    int const kneeX   = 105 + base.x + (knee_y[ps->knee_incs] >> 2);
-    int const kneeY   = 280 + base.y + knee_y[ps->knee_incs];
-    int const kneePal = P_GetKneePal(ps);
-
-    G_DrawTileScaled(kneeX, kneeY, KNEE, kneeShade, 4 | DRAWEAP_CENTER | RS_LERP, kneePal, W_KNEE);
-
-    return 1;
-}
-
-static int P_DisplayKnuckles(int knuckleShade)
-{
-    if (WW2GI)
-        return 0;
-
-    auto const pPlayer = g_player[screenpeek].ps;
-
-    if (pPlayer->knuckle_incs == 0)
-        return 0;
-
-    static int8_t const knuckleFrames[] = { 0, 1, 2, 2, 3, 3, 3, 2, 2, 1, 0 };
-
-    switch (VM_OnEvent(EVENT_DISPLAYKNUCKLES, pPlayer->i, screenpeek))
-    {
-        case 1: return 1;
-        case -1: return 0;
-    }
-
-    if ((unsigned) (pPlayer->knuckle_incs>>1) >= ARRAY_SIZE(knuckleFrames) || sprite[pPlayer->i].extra <= 0)
-        return 0;
-
-    auto const base       = P_GetDisplayBaseXY(pPlayer);
-    int const knuckleX    = 160 + base.x;
-    int const knuckleY    = 180 + base.y;
-    int const knuckleTile = CRACKKNUCKLES + knuckleFrames[pPlayer->knuckle_incs >> 1];
-    int const knucklePal  = P_GetHudPal(pPlayer);
-
-    G_DrawTileScaled(knuckleX, knuckleY, knuckleTile, knuckleShade, 4 | DRAWEAP_CENTER | RS_LERP, knucklePal, W_KNUCKLES);
-
-    return 1;
-}
-
-void P_SetWeaponGamevars(int playerNum, const DukePlayer_t * const pPlayer)
-{
-    Gv_SetVar(g_weaponVarID, pPlayer->curr_weapon, pPlayer->i, playerNum);
-    Gv_SetVar(g_worksLikeVarID,
-              ((unsigned)pPlayer->curr_weapon < MAX_WEAPONS) ? PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) : -1,
-              pPlayer->i, playerNum);
-}
-
-static void P_FireWeapon(int playerNum)
-{
-    auto const pPlayer = g_player[playerNum].ps;
-
-    if (VM_OnEvent(EVENT_DOFIRE, pPlayer->i, playerNum) || pPlayer->weapon_pos != 0)
-        return;
-
-    if (PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) != KNEE_WEAPON)
-    {
-        pPlayer->ammo_amount[pPlayer->curr_weapon]--;
-        P_DoWeaponRumble(playerNum);
-    }
-
-    if (PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == FLAMETHROWER_WEAPON && sector[pPlayer->cursectnum].lotag == ST_2_UNDERWATER)
-        return;
-
-    if (PWEAPON(playerNum, pPlayer->curr_weapon, FireSound) > 0)
-        A_PlaySound(PWEAPON(playerNum, pPlayer->curr_weapon, FireSound), pPlayer->i);
-
-    P_SetWeaponGamevars(playerNum, pPlayer);
-    //        OSD_Printf("doing %d %d %d\n",PWEAPON(snum, p->curr_weapon, Shoots),p->curr_weapon,snum);
-    A_Shoot(pPlayer->i, PWEAPON(playerNum, pPlayer->curr_weapon, Shoots));
-
-    for (bssize_t burstFire = PWEAPON(playerNum, pPlayer->curr_weapon, ShotsPerBurst) - 1; burstFire > 0; --burstFire)
-    {
-        if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_FIREEVERYOTHER)
-        {
-            // devastator hack to make the projectiles fire on a delay from player code
-            actor[pPlayer->i].t_data[7] = (PWEAPON(playerNum, pPlayer->curr_weapon, ShotsPerBurst)) << 1;
-        }
-        else
-        {
-            if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_AMMOPERSHOT &&
-                PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) != KNEE_WEAPON)
-            {
-                if (pPlayer->ammo_amount[pPlayer->curr_weapon] > 0)
-                    pPlayer->ammo_amount[pPlayer->curr_weapon]--;
-                else
-                    break;
-            }
-
-            A_Shoot(pPlayer->i, PWEAPON(playerNum, pPlayer->curr_weapon, Shoots));
-        }
-    }
-
-    if (!(PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_NOVISIBLE))
-    {
-#ifdef POLYMER
-        auto s = (uspriteptr_t)&sprite[pPlayer->i];
-        vec3_t const offset = { -((sintable[(s->ang+512)&2047])>>7), -((sintable[(s->ang)&2047])>>7), pPlayer->spritezoffset };
-        G_AddGameLight(pPlayer->i, pPlayer->cursectnum, offset, 8192, 0, 100, PWEAPON(playerNum, pPlayer->curr_weapon, FlashColor), PR_LIGHT_PRIO_MAX_GAME);
-        practor[pPlayer->i].lightcount = 2;
-#endif  // POLYMER
-        pPlayer->visibility = 0;
-    }
-
-    if (WW2GI)
-    {
-        if (/*!(PWEAPON(playerNum, p->curr_weapon, Flags) & WEAPON_CHECKATRELOAD) && */ pPlayer->reloading == 1 ||
-                (PWEAPON(playerNum, pPlayer->curr_weapon, Reload) > PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime) && pPlayer->ammo_amount[pPlayer->curr_weapon] > 0
-                 && (PWEAPON(playerNum, pPlayer->curr_weapon, Clip)) && (((pPlayer->ammo_amount[pPlayer->curr_weapon]%(PWEAPON(playerNum, pPlayer->curr_weapon, Clip)))==0))))
-        {
-            pPlayer->kickback_pic = PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime);
-        }
-    }
-}
-
-static void P_DoWeaponSpawn(int playerNum)
-{
-    auto const pPlayer = g_player[playerNum].ps;
-
-    // NOTE: For the 'Spawn' member, 0 means 'none', too (originally so,
-    // i.e. legacy). The check for <0 was added to the check because mod
-    // authors (rightly) assumed that -1 is the no-op value.
-    if (PWEAPON(playerNum, pPlayer->curr_weapon, Spawn) <= 0)  // <=0 : AMC TC beta/RC2 has WEAPONx_SPAWN -1
-        return;
-
-    int newSprite = A_Spawn(pPlayer->i, PWEAPON(playerNum, pPlayer->curr_weapon, Spawn));
-
-    if ((PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_SPAWNTYPE3))
-    {
-        // like chaingun shells
-        sprite[newSprite].ang += 1024;
-        sprite[newSprite].ang &= 2047;
-        sprite[newSprite].xvel += 32;
-        sprite[newSprite].z += (3<<8);
-    }
-
-    A_SetSprite(newSprite,CLIPMASK0);
-}
-
-void P_DisplayScuba(void)
-{
-    if (g_player[screenpeek].ps->scuba_on)
-    {
-        auto const pPlayer = g_player[screenpeek].ps;
-
-        if (VM_OnEvent(EVENT_DISPLAYSCUBA, pPlayer->i, screenpeek) != 0)
-            return;
-
-        int const scubaPal = P_GetHudPal(pPlayer);
-        int scubaY = 200 - tilesiz[SCUBAMASK].y;
-        if (ud.screen_size > 4 && ud.statusbarmode == 0)
-            // Scale the offset of 8px with the status bar, otherwise the bottom of the tile is cut
-            scubaY -= scale(8, ud.statusbarscale, 100);
-
-#ifdef SPLITSCREEN_MOD_HACKS
-        g_snum = screenpeek;
-#endif
-
-        // this is a hack to hide the seam that appears between the two halves of the mask in GL
-#ifdef USE_OPENGL
-        if (videoGetRenderMode() >= REND_POLYMOST)
-            G_DrawTileScaled(44, scubaY, SCUBAMASK, 0, 2 + 16 + DRAWEAP_CENTER, scubaPal);
-#endif
-        G_DrawTileScaled(43, scubaY, SCUBAMASK, 0, 2 + 16 + DRAWEAP_CENTER, scubaPal);
-        G_DrawTileScaled(320 - 43, scubaY, SCUBAMASK, 0, 2 + 4 + 16 + DRAWEAP_CENTER, scubaPal);
-    }
-}
-
-static int8_t const access_tip_y [] = {
-    0, -8, -16, -32, -64, -84, -108, -108, -108, -108, -108, -108, -108, -108, -108, -108, -96, -72, -64, -32, -16,
-    /* EDuke32: */ 0, 16, 32, 48,
-    // At y coord 64, the hand is already not shown.
-};
-
-static int P_DisplayTip(int tipShade)
-{
-    auto const pPlayer = g_player[screenpeek].ps;
-
-    if (pPlayer->tipincs == 0)
-        return 0;
-
-    switch (VM_OnEvent(EVENT_DISPLAYTIP, pPlayer->i, screenpeek))
-    {
-        case 1: return 1;
-        case -1: return 0;
-    }
-
-    // Report that the tipping hand has been drawn so that the otherwise
-    // selected weapon is not drawn.
-    if ((unsigned)pPlayer->tipincs >= ARRAY_SIZE(access_tip_y))
-        return 1;
-
-    auto const base     = P_GetDisplayBaseXY(pPlayer);
-    int const tipX      = 170 + base.x;
-    int const tipY      = 240 + base.y + (access_tip_y[pPlayer->tipincs] >> 1);
-    int const tipTile   = TIP + ((26 - pPlayer->tipincs) >> 4);
-    int const tipPal    = P_GetHudPal(pPlayer);
-
-    G_DrawTileScaled(tipX, tipY, tipTile, tipShade, DRAWEAP_CENTER | RS_LERP, tipPal, W_TIP);
-
-    return 1;
-}
-
-static int P_DisplayAccess(int accessShade)
-{
-    auto const pSprite = g_player[screenpeek].ps;
-
-    if (pSprite->access_incs == 0)
-        return 0;
-
-    switch (VM_OnEvent(EVENT_DISPLAYACCESS, pSprite->i, screenpeek))
-    {
-        case 1: return 1;
-        case -1: return 0;
-    }
-
-    if ((unsigned)pSprite->access_incs >= ARRAY_SIZE(access_tip_y)-4 || sprite[pSprite->i].extra <= 0)
-        return 1;
-
-    auto const base     = P_GetDisplayBaseXY(pSprite);
-    int const accessX   = 170 + base.x + (access_tip_y[pSprite->access_incs] >> 2);
-    int const accessY   = 266 + base.y + access_tip_y[pSprite->access_incs];
-    int const accessPal = (pSprite->access_spritenum >= 0) ? sprite[pSprite->access_spritenum].pal : 0;
-
-    auto const accessMode = pSprite->access_incs > 3 && (pSprite->access_incs - 3) >> 3;
-    int  const accessTile = accessMode ? HANDHOLDINGLASER + (pSprite->access_incs >> 3) : HANDHOLDINGACCESS;
-    int  const accessBits = accessMode ? DRAWEAP_CENTER : (4 | DRAWEAP_CENTER);
-
-    G_DrawTileScaled(accessX, accessY, accessTile, accessShade, accessBits | RS_LERP | RS_FORCELERP, accessPal, W_ACCESSCARD);
-
-    return 1;
-}
-
-void P_DisplayWeapon(void)
-{
-    auto const pPlayer     = g_player[screenpeek].ps;
-    auto const weaponFrame = &pPlayer->kickback_pic;
-
-    int currentWeapon;
-
-#ifdef SPLITSCREEN_MOD_HACKS
-    g_snum = screenpeek;
-#endif
-
-    if (pPlayer->newowner >= 0 || ud.camerasprite >= 0 || pPlayer->over_shoulder_on > 0
-        || (sprite[pPlayer->i].pal != 1 && sprite[pPlayer->i].extra <= 0))
-        return;
-
-    int weaponX       = (160) - 90;
-    int weaponY       = klabs(pPlayer->look_ang) / 9;
-    int weaponYOffset = 80 - (pPlayer->weapon_pos * pPlayer->weapon_pos);
-    int weaponShade   = sprite[pPlayer->i].shade <= 24 ? sprite[pPlayer->i].shade : 24;
-
-    // fixes trying to interpolate between the weapon_pos 0 and fully lowered positions when placing tripbombs
-    // FFS, WEAPON_POS_RAISE gets set in P_DoCounters() and then P_ProcessWeapon() decrements it before we can check for it when drawing
-#ifndef EDUKE32_STANDALONE
-    int32_t weaponBits = pPlayer->weapon_pos == WEAPON_POS_LOWER || pPlayer->weapon_pos >= WEAPON_POS_RAISE-1 ? 0 : RS_LERP;
-#endif
-    if (P_DisplayFist(weaponShade) || P_DisplayKnuckles(weaponShade) || P_DisplayTip(weaponShade) || P_DisplayAccess(weaponShade))
-        goto enddisplayweapon;
-
-    P_DisplayKnee(weaponShade);
-
-    if (ud.weaponsway)
-    {
-        weaponX -= (sintable[((pPlayer->weapon_sway>>1)+512)&2047]/(1024+512));
-        weaponYOffset -= (sprite[pPlayer->i].xrepeat < 32) ? klabs(sintable[(pPlayer->weapon_sway << 2) & 2047] >> 9)
-                                                           : klabs(sintable[(pPlayer->weapon_sway >> 1) & 2047] >> 10);
-    }
-    else weaponYOffset -= 16;
-
-    weaponX -= 58 + pPlayer->weapon_ang;
-    weaponYOffset -= (pPlayer->hard_landing << 3);
-
-    currentWeapon       = PWEAPON(screenpeek, (pPlayer->last_weapon >= 0) ? pPlayer->last_weapon : pPlayer->curr_weapon, WorksLike);
-    hudweap.gunposy     = weaponYOffset;
-    hudweap.lookhoriz   = weaponY;
-    hudweap.cur         = currentWeapon;
-    hudweap.gunposx     = weaponX;
-    hudweap.shade       = weaponShade;
-    hudweap.count       = *weaponFrame;
-    hudweap.lookhalfang = pPlayer->look_ang >> 1;
-
-    if (VM_OnEvent(EVENT_DISPLAYWEAPON, pPlayer->i, screenpeek) == 0)
-    {
-#ifndef EDUKE32_STANDALONE
-        int const quickKickFrame = 14 - pPlayer->quick_kick;
-
-        if (!FURY && (quickKickFrame != 14 || pPlayer->last_quick_kick) && ud.drawweapon == 1)
-        {
-            int const weaponPal = P_GetKneePal(pPlayer);
-
-            if (quickKickFrame < 6 || quickKickFrame > 12)
-                G_DrawTileScaled(weaponX + 80 - (pPlayer->look_ang >> 1), weaponY + 250 - weaponYOffset, KNEE, weaponShade,
-                                 weaponBits | 4 | DRAWEAP_CENTER, weaponPal, W_KNEE2);
-            else
-                G_DrawTileScaled(weaponX + 160 - 16 - (pPlayer->look_ang >> 1), weaponY + 214 - weaponYOffset, KNEE + 1,
-                                 weaponShade, weaponBits | 4 | DRAWEAP_CENTER, weaponPal, W_KNEE2);
-        }
-
-        if (!FURY && sprite[pPlayer->i].xrepeat < 40)
-        {
-            static int32_t fistPos;
-
-            int const weaponPal = P_GetHudPal(pPlayer);
-
-            if (pPlayer->jetpack_on == 0)
-            {
-                int const playerXvel = sprite[pPlayer->i].xvel;
-                weaponY += 32 - (playerXvel >> 3);
-                fistPos += playerXvel >> 3;
-            }
-
-            currentWeapon = weaponX;
-            weaponX += sintable[(fistPos)&2047] >> 10;
-            G_DrawTileScaled(weaponX + 250 - (pPlayer->look_ang >> 1), weaponY + 258 - (klabs(sintable[(fistPos)&2047] >> 8)),
-                FIST, weaponShade, weaponBits, weaponPal, W_FIST);
-            weaponX = currentWeapon - (sintable[(fistPos)&2047] >> 10);
-            G_DrawTileScaled(weaponX + 40 - (pPlayer->look_ang >> 1), weaponY + 200 + (klabs(sintable[(fistPos)&2047] >> 8)), FIST,
-                weaponShade, weaponBits | 4, weaponPal, W_FIST2);
-        }
-        else
-#endif
-        {
-            switch (ud.drawweapon)
-            {
-                case 1: break;
-#ifndef EDUKE32_STANDALONE
-                case 2:
-                    if (!FURY && (unsigned)hudweap.cur < MAX_WEAPONS && hudweap.cur != KNEE_WEAPON)
-                        rotatesprite_win(160 << 16, (180 + (pPlayer->weapon_pos * pPlayer->weapon_pos)) << 16, divscale16(ud.statusbarscale, 100), 0,
-                                         hudweap.cur == GROW_WEAPON ? GROWSPRITEICON : WeaponPickupSprites[hudweap.cur], 0,
-                                         0, 2);
-#endif
-                default: goto enddisplayweapon;
-            }
-
-            if (VM_OnEvent(EVENT_DRAWWEAPON, g_player[screenpeek].ps->i, screenpeek)||(currentWeapon == KNEE_WEAPON && *weaponFrame == 0))
-                goto enddisplayweapon;
-
-#ifndef EDUKE32_STANDALONE
-            int const doAnim      = !(sprite[pPlayer->i].pal == 1 || ud.pause_on || g_player[myconnectindex].ps->gm & MODE_MENU);
-            int const halfLookAng = pPlayer->look_ang >> 1;
-
-            int const weaponPal = P_GetHudPal(pPlayer);
-
-            if (!FURY)
-            switch (currentWeapon)
-            {
-            case KNEE_WEAPON:
-            {
-                int const kneePal = P_GetKneePal(pPlayer, weaponPal);
-
-                if (*weaponFrame < 5 || *weaponFrame > 9)
-                    G_DrawTileScaled(weaponX + 220 - halfLookAng, weaponY + 250 - weaponYOffset, KNEE,
-                                     weaponShade, weaponBits, kneePal, W_KNEE);
-                else
-                    G_DrawTileScaled(weaponX + 160 - halfLookAng, weaponY + 214 - weaponYOffset, KNEE + 1,
-                                     weaponShade, weaponBits, kneePal, W_KNEE);
-                break;
-            }
-
-            case TRIPBOMB_WEAPON:
-                weaponX += 8;
-                weaponYOffset -= 10;
-
-                if ((*weaponFrame) > 6)
-                    weaponY += ((*weaponFrame) << 3);
-                else if ((*weaponFrame) < 4)
-                    G_DrawWeaponTile(weaponX + 142 - halfLookAng, weaponY + 234 - weaponYOffset, TRIPBOMB, weaponShade, weaponBits, weaponPal, W_TRIPBOMB);
-
-                G_DrawWeaponTile(weaponX + 130 - halfLookAng, weaponY + 249 - weaponYOffset, HANDHOLDINGLASER + ((*weaponFrame) >> 2), weaponShade, weaponBits,
-                                 weaponPal, W_TRIPBOMB_LEFTHAND);
-
-                G_DrawWeaponTile(weaponX + 152 - halfLookAng, weaponY + 249 - weaponYOffset, HANDHOLDINGLASER + ((*weaponFrame) >> 2), weaponShade, weaponBits | 4,
-                                 weaponPal, W_TRIPBOMB_RIGHTHAND);
-                break;
-
-            case RPG_WEAPON:
-                weaponX -= sintable[(768 + ((*weaponFrame) << 7)) & 2047] >> 11;
-                weaponYOffset += sintable[(768 + ((*weaponFrame) << 7)) & 2047] >> 11;
-
-                if (!WORLDTOUR && !(duke3d_globalflags & DUKE3D_NO_WIDESCREEN_PINNING))
-                    weaponBits |= 512;
-
-                if (*weaponFrame > 0)
-                {
-                    int totalTime;
-                    if (*weaponFrame < (WW2GI ? (totalTime = PWEAPON(screenpeek, pPlayer->curr_weapon, TotalTime)) : 8))
-                        G_DrawWeaponTile(weaponX + 164, (weaponY << 1) + 176 - weaponYOffset, RPGGUN + ((*weaponFrame) >> 1), weaponShade, weaponBits, weaponPal,
-                                         W_RPG_MUZZLE);
-                    else if (WW2GI)
-                    {
-                        totalTime = PWEAPON(screenpeek, pPlayer->curr_weapon, TotalTime);
-                        int const reloadTime = PWEAPON(screenpeek, pPlayer->curr_weapon, Reload);
-
-                        weaponYOffset -= (*weaponFrame < ((reloadTime - totalTime) / 2 + totalTime))
-                                          ? 10 * ((*weaponFrame) - totalTime)   // down
-                                          : 10 * (reloadTime - (*weaponFrame)); // up
-                    }
-                }
-
-                G_DrawWeaponTile(weaponX + 164, (weaponY << 1) + 176 - weaponYOffset, WT_WIDE(RPGGUN), weaponShade, weaponBits, weaponPal, W_RPG);
-                break;
-
-            case SHOTGUN_WEAPON:
-                weaponX -= 8;
-
-                if (WW2GI)
-                {
-                    int const totalTime  = PWEAPON(screenpeek, pPlayer->curr_weapon, TotalTime);
-                    int const reloadTime = PWEAPON(screenpeek, pPlayer->curr_weapon, Reload);
-
-                    if (*weaponFrame > 0)
-                        weaponYOffset -= sintable[(*weaponFrame)<<7]>>12;
-
-                    if (*weaponFrame > 0 && doAnim)
-                        weaponX += 1-(wrand()&3);
-
-                    if (*weaponFrame == 0)
-                    {
-                        G_DrawWeaponTile(weaponX + 146 - halfLookAng, weaponY + 202 - weaponYOffset, SHOTGUN, weaponShade, weaponBits | RS_FORCELERP,
-                                         weaponPal, W_SHOTGUN);
-                    }
-                    else if (*weaponFrame <= totalTime)
-                    {
-                        G_DrawWeaponTile(weaponX + 146 - halfLookAng, weaponY + 202 - weaponYOffset, SHOTGUN + 1, weaponShade, weaponBits | RS_FORCELERP,
-                                         weaponPal, W_SHOTGUN);
-                    }
-                    // else we are in 'reload time'
-                    else
-                    {
-                        weaponYOffset -= (*weaponFrame < ((reloadTime - totalTime) / 2 + totalTime))
-                                         ? 10 * ((*weaponFrame) - totalTime)    // D
-                                         : 10 * (reloadTime - (*weaponFrame));  // U
-
-                        G_DrawWeaponTile(weaponX + 146 - halfLookAng, weaponY + 202 - weaponYOffset, SHOTGUN, weaponShade, weaponBits | RS_FORCELERP,
-                                         weaponPal, W_SHOTGUN);
-                    }
-
-                    break;
-                }
-
-                switch (*weaponFrame)
-                {
-                    case 1:
-                    case 2:
-                        G_DrawWeaponTile(weaponX + 168 - halfLookAng, weaponY + 201 - weaponYOffset, SHOTGUN + 2, -128, weaponBits | RS_FORCELERP, weaponPal,
-                                         W_SHOTGUN_MUZZLE);
-                        fallthrough__;
-                    case 0:
-                    case 6:
-                    case 7:
-                    case 8:
-                        G_DrawWeaponTile(weaponX + 146 - halfLookAng, weaponY + 202 - weaponYOffset, SHOTGUN, weaponShade, weaponBits, weaponPal, W_SHOTGUN);
-                        break;
-
-                    case 3:
-                    case 4:
-                        weaponYOffset -= 40;
-                        weaponX += 20;
-
-                        G_DrawWeaponTile(weaponX + 178 - halfLookAng, weaponY + 194 - weaponYOffset, SHOTGUN + 1 + ((*(weaponFrame)-1) >> 1), -128, weaponBits,
-                                         weaponPal, W_SHOTGUN_MUZZLE);
-                        fallthrough__;
-                    case 5:
-                    case 9:
-                    case 10:
-                    case 11:
-                    case 12:
-                        G_DrawWeaponTile(weaponX + 158 - halfLookAng, weaponY + 220 - weaponYOffset, SHOTGUN + 3, weaponShade, weaponBits, weaponPal, W_SHOTGUN);
-                        break;
-
-                    case 13:
-                    case 14:
-                    case 15:
-                        G_DrawWeaponTile(32 + weaponX + 166 - halfLookAng, weaponY + 210 - weaponYOffset, SHOTGUN + 4, weaponShade, weaponBits & ~RS_LERP, weaponPal,
-                                         W_SHOTGUN);
-                        break;
-
-                    case 16:
-                    case 17:
-                    case 18:
-                    case 19:
-                    case 24:
-                    case 25:
-                    case 26:
-                    case 27:
-                        G_DrawWeaponTile(64 + weaponX + 170 - halfLookAng, weaponY + 196 - weaponYOffset, SHOTGUN + 5, weaponShade, weaponBits, weaponPal,
-                                         W_SHOTGUN);
-                        break;
-
-                    case 20:
-                    case 21:
-                    case 22:
-                    case 23:
-                        G_DrawWeaponTile(64 + weaponX + 176 - halfLookAng, weaponY + 196 - weaponYOffset, SHOTGUN + 6, weaponShade, weaponBits, weaponPal,
-                                         W_SHOTGUN);
-                        break;
-
-
-                    case 28:
-                    case 29:
-                    case 30:
-                        G_DrawWeaponTile(32 + weaponX + 156 - halfLookAng, weaponY + 206 - weaponYOffset, SHOTGUN + 4, weaponShade, weaponBits, weaponPal,
-                                         W_SHOTGUN);
-                        break;
-                }
-                break;
-
-            case CHAINGUN_WEAPON:
-                if (*weaponFrame > 0)
-                {
-                    weaponYOffset -= sintable[(*weaponFrame)<<7]>>12;
-
-                    if (doAnim)
-                        weaponX += 1-(wrand()&3);
-                }
-
-                if (WW2GI)
-                {
-                    int const totalTime = PWEAPON(screenpeek, pPlayer->curr_weapon, TotalTime);
-                    int const reloadTime = PWEAPON(screenpeek, pPlayer->curr_weapon, Reload);
-
-                    if (*weaponFrame == 0)
-                    {
-                        G_DrawWeaponTile(weaponX + 178 - halfLookAng, weaponY + 233 - weaponYOffset, CHAINGUN + 1, weaponShade, weaponBits | RS_FORCELERP,
-                                         weaponPal, W_CHAINGUN_BOTTOM);
-                    }
-                    else if (*weaponFrame <= totalTime)
-                    {
-                        G_DrawWeaponTile(weaponX + 188 - halfLookAng, weaponY + 243 - weaponYOffset, CHAINGUN + 2, weaponShade, weaponBits | RS_FORCELERP,
-                                         weaponPal, W_CHAINGUN_BOTTOM);
-                    }
-                    // else we are in 'reload time'
-                    // divide reload time into fifths..
-                    // 1) move weapon up/right, hand on clip (CHAINGUN - 17)
-                    // 2) move weapon up/right, hand removing clip (CHAINGUN - 18)
-                    // 3) hold weapon up/right, hand removed clip (CHAINGUN - 19)
-                    // 4) hold weapon up/right, hand inserting clip (CHAINGUN - 18)
-                    // 5) move weapon down/left, clip inserted (CHAINGUN - 17)
-                    else
-                    {
-                        int iFifths = (reloadTime - totalTime) / 5;
-                        if (iFifths < 1)
-                            iFifths = 1;
-
-                        if (*weaponFrame < iFifths + totalTime)
-                        {
-                            // first segment
-                            int const weaponOffset = 80 - 10 * (totalTime + iFifths - (*weaponFrame));
-                            weaponYOffset += weaponOffset;
-                            weaponX += weaponOffset;
-                            G_DrawWeaponTile(weaponX + 168 - halfLookAng, weaponY + 260 - weaponYOffset, CHAINGUN - 17, weaponShade,
-                                             weaponBits | RS_FORCELERP, weaponPal, W_CHAINGUN_BOTTOM);
-                        }
-                        else if (*weaponFrame < (iFifths * 2 + totalTime))
-                        {
-                            // second segment
-                            weaponYOffset += 80; // D
-                            weaponX += 80;
-                            G_DrawWeaponTile(weaponX + 168 - halfLookAng, weaponY + 260 - weaponYOffset, CHAINGUN - 18, weaponShade,
-                                             weaponBits | RS_FORCELERP, weaponPal, W_CHAINGUN_BOTTOM);
-                        }
-                        else if (*weaponFrame < (iFifths * 3 + totalTime))
-                        {
-                            // third segment
-                            // up
-                            weaponYOffset += 80;
-                            weaponX += 80;
-                            G_DrawWeaponTile(weaponX + 168 - halfLookAng, weaponY + 260 - weaponYOffset, CHAINGUN - 19, weaponShade,
-                                             weaponBits | RS_FORCELERP, weaponPal, W_CHAINGUN_BOTTOM);
-                        }
-                        else if (*weaponFrame < (iFifths * 4 + totalTime))
-                        {
-                            // fourth segment
-                            // down
-                            weaponYOffset += 80; // D
-                            weaponX += 80;
-                            G_DrawWeaponTile(weaponX + 168 - halfLookAng, weaponY + 260 - weaponYOffset, CHAINGUN - 18, weaponShade,
-                                             weaponBits | RS_FORCELERP, weaponPal, W_CHAINGUN_BOTTOM);
-                        }
-                        else
-                        {
-                            // up and left
-                            int const weaponOffset = 10 * (reloadTime - (*weaponFrame));
-                            weaponYOffset += weaponOffset; // U
-                            weaponX += weaponOffset;
-                            G_DrawWeaponTile(weaponX + 168 - halfLookAng, weaponY + 260 - weaponYOffset, CHAINGUN - 17, weaponShade,
-                                             weaponBits | RS_FORCELERP, weaponPal, W_CHAINGUN_BOTTOM);
-                        }
-                    }
-
-                    break;
-                }
-
-                switch (*weaponFrame)
-                {
-                case 0:
-                    G_DrawWeaponTile(weaponX + 178 - (pPlayer->look_ang >> 1), weaponY + 233 - weaponYOffset, CHAINGUN + 1, weaponShade,
-                                        weaponBits | RS_FORCELERP, weaponPal, W_CHAINGUN_TOP);
-                    G_DrawWeaponTile(weaponX + 168 - (pPlayer->look_ang >> 1), weaponY + 260 - weaponYOffset, CHAINGUN, weaponShade, weaponBits, weaponPal,
-                                     W_CHAINGUN_BOTTOM);
-                    break;
-
-                default:
-                    if (*weaponFrame > PWEAPON(screenpeek, CHAINGUN_WEAPON, FireDelay) && *weaponFrame < PWEAPON(screenpeek, CHAINGUN_WEAPON, TotalTime))
-                    {
-                        int randomOffset = doAnim ? wrand() & 7 : 0;
-                        G_DrawWeaponTile(randomOffset + weaponX - 4 + 140 - (pPlayer->look_ang >> 1),
-                                            randomOffset + weaponY - ((*weaponFrame) >> 1) + 208 - weaponYOffset, CHAINGUN + 5 + ((*weaponFrame - 4) / 5),
-                                            weaponShade, weaponBits, weaponPal);
-                        if (doAnim)
-                            randomOffset = wrand() & 7;
-                        G_DrawWeaponTile(randomOffset + weaponX - 4 + 184 - (pPlayer->look_ang >> 1),
-                                            randomOffset + weaponY - ((*weaponFrame) >> 1) + 208 - weaponYOffset, CHAINGUN + 5 + ((*weaponFrame - 4) / 5),
-                                            weaponShade, weaponBits, weaponPal);
-                    }
-
-                    if (*weaponFrame < PWEAPON(screenpeek, CHAINGUN_WEAPON, TotalTime) - 4)
-                    {
-                        int const randomOffset = doAnim ? wrand() & 7 : 0;
-                        G_DrawWeaponTile(randomOffset + weaponX - 4 + 162 - (pPlayer->look_ang >> 1),
-                                            randomOffset + weaponY - ((*weaponFrame) >> 1) + 208 - weaponYOffset, CHAINGUN + 5 + ((*weaponFrame - 2) / 5),
-                                            weaponShade, weaponBits, weaponPal);
-                        G_DrawWeaponTile(weaponX + 178 - (pPlayer->look_ang >> 1), weaponY + 233 - weaponYOffset, CHAINGUN + 1 + ((*weaponFrame) >> 1),
-                                            weaponShade, weaponBits & ~RS_LERP, weaponPal, W_CHAINGUN_TOP);
-                    }
-                    else
-                        G_DrawWeaponTile(weaponX + 178 - (pPlayer->look_ang >> 1), weaponY + 233 - weaponYOffset, CHAINGUN + 1, weaponShade,
-                                            weaponBits & ~RS_LERP, weaponPal, W_CHAINGUN_TOP);
-
-                    G_DrawWeaponTile(weaponX + 168 - (pPlayer->look_ang >> 1), weaponY + 260 - weaponYOffset, CHAINGUN, weaponShade, weaponBits & ~RS_LERP,
-                                     weaponPal, W_CHAINGUN_BOTTOM);
-                    break;
-                }
-
-                break;
-
-            case PISTOL_WEAPON:
-            {
-                if ((*weaponFrame) < PWEAPON(screenpeek, PISTOL_WEAPON, TotalTime) + 1)
-                {
-                    static uint8_t pistolFrames[] = { 0, 1, 2 };
-                    int            pistolOffset   = 195 - 12 + weaponX;
-
-                    if ((*weaponFrame) == PWEAPON(screenpeek, PISTOL_WEAPON, FireDelay))
-                        pistolOffset -= 3;
-
-                    G_DrawWeaponTile((pistolOffset - (pPlayer->look_ang >> 1)), (weaponY + 244 - weaponYOffset),
-                                     FIRSTGUN + pistolFrames[*weaponFrame > 2 ? 0 : *weaponFrame], weaponShade, weaponBits, weaponPal, W_PISTOL);
-
-                    break;
-                }
-
-                if (!WORLDTOUR && !(duke3d_globalflags & DUKE3D_NO_WIDESCREEN_PINNING) && DUKE)
-                    weaponBits |= 512;
-
-                int32_t const FIRSTGUN_5 = WORLDTOUR ? FIRSTGUNRELOADWIDE : FIRSTGUN + 5;
-
-                if ((*weaponFrame) < PWEAPON(screenpeek, PISTOL_WEAPON, Reload) - (NAM_WW2GI ? 40 : 17))
-                    G_DrawWeaponTile(194 - (pPlayer->look_ang >> 1), weaponY + 230 - weaponYOffset, FIRSTGUN + 4, weaponShade, weaponBits & ~RS_LERP,
-                                     weaponPal, W_PISTOL);
-                else if ((*weaponFrame) < PWEAPON(screenpeek, PISTOL_WEAPON, Reload) - (NAM_WW2GI ? 35 : 12))
-                {
-                    G_DrawWeaponTile(244 - ((*weaponFrame) << 3) - (pPlayer->look_ang >> 1), weaponY + 130 - weaponYOffset + ((*weaponFrame) << 4), FIRSTGUN + 6,
-                                     weaponShade, weaponBits, weaponPal, W_PISTOL_CLIP);
-                    G_DrawWeaponTile(224 - (pPlayer->look_ang >> 1), weaponY + 220 - weaponYOffset, FIRSTGUN_5, weaponShade, weaponBits, weaponPal, W_PISTOL);
-                }
-                else if ((*weaponFrame) < PWEAPON(screenpeek, PISTOL_WEAPON, Reload) - (NAM_WW2GI ? 30 : 7))
-                {
-                    G_DrawWeaponTile(124 + ((*weaponFrame) << 1) - (pPlayer->look_ang >> 1), weaponY + 430 - weaponYOffset - ((*weaponFrame) << 3), FIRSTGUN + 6,
-                                     weaponShade, weaponBits, weaponPal, W_PISTOL_CLIP);
-                    G_DrawWeaponTile(224 - (pPlayer->look_ang >> 1), weaponY + 220 - weaponYOffset, FIRSTGUN_5, weaponShade, weaponBits, weaponPal, W_PISTOL);
-                }
-
-                else if ((*weaponFrame) < PWEAPON(screenpeek, PISTOL_WEAPON, Reload) - (NAM_WW2GI ? 12 : 4))
-                {
-                    G_DrawWeaponTile(184 - (pPlayer->look_ang >> 1), weaponY + 235 - weaponYOffset, FIRSTGUN + 8, weaponShade, weaponBits, weaponPal,
-                                     W_PISTOL_HAND);
-                    G_DrawWeaponTile(224 - (pPlayer->look_ang >> 1), weaponY + 210 - weaponYOffset, FIRSTGUN_5, weaponShade, weaponBits, weaponPal, W_PISTOL);
-                }
-                else if ((*weaponFrame) < PWEAPON(screenpeek, PISTOL_WEAPON, Reload) - (NAM_WW2GI ? 6 : 2))
-                {
-                    G_DrawWeaponTile(164 - (pPlayer->look_ang >> 1), weaponY + 245 - weaponYOffset, FIRSTGUN + 8, weaponShade, weaponBits, weaponPal,
-                                     W_PISTOL_HAND);
-                    G_DrawWeaponTile(224 - (pPlayer->look_ang >> 1), weaponY + 220 - weaponYOffset, FIRSTGUN_5, weaponShade, weaponBits, weaponPal, W_PISTOL);
-                }
-                else if ((*weaponFrame) < PWEAPON(screenpeek, PISTOL_WEAPON, Reload))
-                    G_DrawWeaponTile(194 - (pPlayer->look_ang >> 1), weaponY + 235 - weaponYOffset, FIRSTGUN_5, weaponShade, weaponBits, weaponPal, W_PISTOL);
-
-                break;
-            }
-
-            case HANDBOMB_WEAPON:
-                {
-                    static uint8_t pipebombFrames [] = { 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2 };
-
-                    if (*weaponFrame >= PWEAPON(screenpeek, pPlayer->curr_weapon, TotalTime) || *weaponFrame >= ARRAY_SIZE(pipebombFrames))
-                        break;
-
-                    if (*weaponFrame)
-                    {
-                        if (WW2GI)
-                        {
-                            int const fireDelay = PWEAPON(screenpeek, pPlayer->curr_weapon, FireDelay);
-                            int const totalTime = PWEAPON(screenpeek, pPlayer->curr_weapon, TotalTime);
-
-                            if (*weaponFrame <= fireDelay)
-                            {
-                                // it holds here
-                                weaponYOffset -= 5 * (*weaponFrame);  // D
-                            }
-                            else if (*weaponFrame < ((totalTime - fireDelay) / 2 + fireDelay))
-                            {
-                                // up and left
-                                int const weaponOffset = (*weaponFrame) - fireDelay;
-                                weaponYOffset += 10 * weaponOffset;  // U
-                                weaponX += 80 * weaponOffset;
-                            }
-                            else if (*weaponFrame < totalTime)
-                            {
-                                // start high
-                                weaponYOffset += 240;
-                                weaponYOffset -= 12 * ((*weaponFrame) - fireDelay);  // D
-                                // move left
-                                weaponX += 90 - 5 * (totalTime - (*weaponFrame));
-                            }
-                        }
-                        else
-                        {
-                            if (*weaponFrame < 7)       weaponYOffset -= 10 * (*weaponFrame);  // D
-                            else if (*weaponFrame < 12) weaponYOffset += 20 * ((*weaponFrame) - 10);  // U
-                            else if (*weaponFrame < 20) weaponYOffset -= 9  * ((*weaponFrame) - 14);  // D
-                        }
-
-                        weaponYOffset += 10;
-                    }
-
-                    G_DrawWeaponTile(weaponX + 190 - halfLookAng, weaponY + 260 - weaponYOffset, HANDTHROW + pipebombFrames[(*weaponFrame)], weaponShade,
-                                     weaponBits, weaponPal, W_HANDBOMB);
-                }
-                break;
-
-            case HANDREMOTE_WEAPON:
-                {
-                    static uint8_t remoteFrames[] = { 0, 1, 1, 2, 1, 1, 0, 0, 0, 0, 0 };
-
-                    if (*weaponFrame >= ARRAY_SIZE(remoteFrames))
-                        break;
-
-                    weaponX = -48;
-                    G_DrawWeaponTile(weaponX + 150 - halfLookAng, weaponY + 258 - weaponYOffset, HANDREMOTE + remoteFrames[(*weaponFrame)], weaponShade,
-                                     weaponBits | RS_FORCELERP, weaponPal, W_HANDREMOTE);
-                }
-                break;
-
-            case DEVISTATOR_WEAPON:
-                if (WW2GI)
-                {
-                    if (*weaponFrame)
-                    {
-                        int32_t const totalTime = PWEAPON(screenpeek, pPlayer->curr_weapon, TotalTime);
-                        int32_t const reloadTime = PWEAPON(screenpeek, pPlayer->curr_weapon, Reload);
-
-                        if (*weaponFrame < totalTime)
-                        {
-                            int const tileOffset = ksgn((*weaponFrame) >> 2);
-
-                            if (pPlayer->ammo_amount[pPlayer->curr_weapon] & 1)
-                            {
-                                G_DrawWeaponTile(weaponX + 30 - halfLookAng, weaponY + 240 - weaponYOffset, DEVISTATOR, weaponShade, weaponBits | 4, weaponPal,
-                                                 W_DEVISTATOR_LEFT);
-                                G_DrawWeaponTile(weaponX + 268 - halfLookAng, weaponY + 238 - weaponYOffset, DEVISTATOR + tileOffset, -32, weaponBits, weaponPal,
-                                                 W_DEVISTATOR_RIGHT);
-                            }
-                            else
-                            {
-                                G_DrawWeaponTile(weaponX + 30 - halfLookAng, weaponY + 240 - weaponYOffset, DEVISTATOR + tileOffset, -32, weaponBits | 4, weaponPal,
-                                                 W_DEVISTATOR_LEFT);
-                                G_DrawWeaponTile(weaponX + 268 - halfLookAng, weaponY + 238 - weaponYOffset, DEVISTATOR, weaponShade, weaponBits, weaponPal,
-                                                 W_DEVISTATOR_RIGHT);
-                            }
-                        }
-                        // else we are in 'reload time'
-                        else
-                        {
-                            weaponYOffset
-                            -= (*weaponFrame < ((reloadTime - totalTime) / 2 + totalTime)) ? 10 * ((*weaponFrame) - totalTime) : 10 * (reloadTime - (*weaponFrame));
-
-                            G_DrawWeaponTile(weaponX + 30 - halfLookAng, weaponY + 240 - weaponYOffset, DEVISTATOR, weaponShade, weaponBits | 4, weaponPal,
-                                             W_DEVISTATOR_LEFT);
-                            G_DrawWeaponTile(weaponX + 268 - halfLookAng, weaponY + 238 - weaponYOffset, DEVISTATOR, weaponShade, weaponBits, weaponPal,
-                                             W_DEVISTATOR_RIGHT);
-                        }
-                    }
-                    else
-                    {
-                        G_DrawWeaponTile(weaponX + 30 - halfLookAng, weaponY + 240 - weaponYOffset, DEVISTATOR, weaponShade, weaponBits | 4, weaponPal,
-                                         W_DEVISTATOR_LEFT);
-                        G_DrawWeaponTile(weaponX + 268 - halfLookAng, weaponY + 238 - weaponYOffset, DEVISTATOR, weaponShade, weaponBits, weaponPal,
-                                         W_DEVISTATOR_RIGHT);
-                    }
-                    break;
-                }
-
-                if (*weaponFrame <= PWEAPON(screenpeek, DEVISTATOR_WEAPON, TotalTime) && *weaponFrame > 0)
-                {
-                    static uint8_t const devastatorFrames[] = { 0, 4, 12, 24, 12, 4, 0 };
-
-                    if (*weaponFrame >= ARRAY_SIZE(devastatorFrames))
-                        break;
-
-                    int const tileOffset = ksgn((*weaponFrame) >> 2);
-
-                    if (pPlayer->hbomb_hold_delay)
-                    {
-                        G_DrawWeaponTile(weaponX + 30 - halfLookAng, weaponY + 240 - weaponYOffset, DEVISTATOR, weaponShade, weaponBits | 4, weaponPal,
-                                         W_DEVISTATOR_LEFT);
-                        G_DrawWeaponTile((devastatorFrames[*weaponFrame] >> 1) + weaponX + 268 - halfLookAng,
-                                         devastatorFrames[*weaponFrame] + weaponY + 238 - weaponYOffset, DEVISTATOR + tileOffset, -32, weaponBits, weaponPal,
-                                         W_DEVISTATOR_RIGHT);
-                    }
-                    else
-                    {
-                        G_DrawWeaponTile(-(devastatorFrames[*weaponFrame] >> 1) + weaponX + 30 - halfLookAng,
-                                         devastatorFrames[*weaponFrame] + weaponY + 240 - weaponYOffset, DEVISTATOR + tileOffset, -32, weaponBits | 4, weaponPal,
-                                         W_DEVISTATOR_LEFT);
-                        G_DrawWeaponTile(weaponX + 268 - halfLookAng, weaponY + 238 - weaponYOffset, DEVISTATOR, weaponShade, weaponBits, weaponPal,
-                                         W_DEVISTATOR_RIGHT);
-                    }
-                }
-                else
-                {
-                    G_DrawWeaponTile(weaponX + 30 - halfLookAng, weaponY + 240 - weaponYOffset, DEVISTATOR, weaponShade, weaponBits | 4, weaponPal,
-                                     W_DEVISTATOR_LEFT);
-                    G_DrawWeaponTile(weaponX + 268 - halfLookAng, weaponY + 238 - weaponYOffset, DEVISTATOR, weaponShade, weaponBits, weaponPal, W_DEVISTATOR_RIGHT);
-                }
-                break;
-
-            case FREEZE_WEAPON:
-                if (!WORLDTOUR && !(duke3d_globalflags & DUKE3D_NO_WIDESCREEN_PINNING) && DUKE)
-                    weaponBits |= 512;
-
-                if ((*weaponFrame) < (PWEAPON(screenpeek, pPlayer->curr_weapon, TotalTime) + 1) && (*weaponFrame) > 0)
-                {
-                    static uint8_t freezerFrames[] = { 0, 0, 1, 1, 2, 2 };
-
-                    if (doAnim)
-                    {
-                        weaponX += wrand() & 3;
-                        weaponY += wrand() & 3;
-                    }
-                    weaponYOffset -= 16;
-                    G_DrawWeaponTile(weaponX + 210 - (pPlayer->look_ang >> 1), weaponY + 261 - weaponYOffset, WORLDTOUR ? FREEZEFIREWIDE : FREEZE + 2, -32,
-                                     weaponBits & ~RS_LERP, weaponPal, W_FREEZE_BASE);
-                    G_DrawWeaponTile(weaponX + 210 - (pPlayer->look_ang >> 1), weaponY + 235 - weaponYOffset, FREEZE + 3 + freezerFrames[*weaponFrame % 6], -32,
-                                     weaponBits & ~RS_LERP, weaponPal, W_FREEZE_TOP);
-                }
-                else
-                    G_DrawWeaponTile(weaponX + 210 - (pPlayer->look_ang >> 1), weaponY + 261 - weaponYOffset, WT_WIDE(FREEZE), weaponShade, weaponBits, weaponPal,
-                                     W_FREEZE_BASE);
-                break;
-
-            case FLAMETHROWER_WEAPON:
-                if ((*weaponFrame) < (PWEAPON(screenpeek, pPlayer->curr_weapon, TotalTime) + 1) && (*weaponFrame) > 0 && sector[pPlayer->cursectnum].lotag != ST_2_UNDERWATER)
-                {
-                    static uint8_t incineratorFrames[] = { 0, 0, 1, 1, 2, 2 };
-
-                    if (doAnim)
-                    {
-                        weaponX += wrand() & 1;
-                        weaponY += wrand() & 1;
-                    }
-                    weaponYOffset -= 16;
-                    G_DrawWeaponTile(weaponX + 210 - (pPlayer->look_ang >> 1), weaponY + 261 - weaponYOffset, FLAMETHROWERFIRE, -32, weaponBits & ~RS_LERP, weaponPal,
-                                     W_FREEZE_BASE);
-                    G_DrawWeaponTile(weaponX + 210 - (pPlayer->look_ang >> 1), weaponY + 235 - weaponYOffset,
-                                     FLAMETHROWERFIRE + 1 + incineratorFrames[*weaponFrame % 6], -32, weaponBits & ~RS_LERP, weaponPal, W_FREEZE_TOP);
-                }
-                else
-                {
-                    G_DrawWeaponTile(weaponX + 210 - (pPlayer->look_ang >> 1), weaponY + 261 - weaponYOffset, FLAMETHROWER, weaponShade, weaponBits, weaponPal,
-                                     W_FREEZE_BASE);
-                    G_DrawWeaponTile(weaponX + 210 - (pPlayer->look_ang >> 1), weaponY + 261 - weaponYOffset, FLAMETHROWERPILOT, weaponShade,
-                                     weaponBits | RS_FORCELERP, weaponPal, W_FREEZE_TOP);
-                }
-                break;
-
-            case GROW_WEAPON:
-            case SHRINKER_WEAPON:
-            {
-                bool const isExpander = currentWeapon == GROW_WEAPON;
-
-                weaponX += 28;
-                weaponY += 18;
-
-                if (WW2GI)
-                {
-                    if (*weaponFrame == 0)
-                    {
-                        // the 'at rest' display
-                        if (isExpander)
-                        {
-                            G_DrawWeaponTile(weaponX + 188 - halfLookAng, weaponY + 240 - weaponYOffset, SHRINKER - 2, weaponShade, weaponBits, weaponPal,
-                                             W_SHRINKER);
-                            break;
-                        }
-                        else if (pPlayer->ammo_amount[currentWeapon] > 0)
-                        {
-                            G_DrawWeaponTileUnfaded(weaponX + 184 - halfLookAng, weaponY + 240 - weaponYOffset, SHRINKER + 2,
-                                                    16 - (sintable[pPlayer->random_club_frame & 2047] >> 10), weaponBits, 0, W_SHRINKER_CRYSTAL);
-                            G_DrawWeaponTile(weaponX + 188 - halfLookAng, weaponY + 240 - weaponYOffset, SHRINKER, weaponShade, weaponBits, weaponPal,
-                                             W_SHRINKER);
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        // the 'active' display.
-                        if (doAnim)
-                        {
-                            weaponX += wrand() & 3;
-                            weaponYOffset += wrand() & 3;
-                        }
-
-                        int const totalTime = PWEAPON(screenpeek, pPlayer->curr_weapon, TotalTime);
-                        int const reloadTime = PWEAPON(screenpeek, pPlayer->curr_weapon, Reload);
-
-                        if (*weaponFrame < totalTime)
-                        {
-                            if (*weaponFrame >= PWEAPON(screenpeek, pPlayer->curr_weapon, FireDelay))
-                            {
-                                // after fire time.
-                                // lower weapon to reload cartridge (not clip)
-                                weaponYOffset -= (isExpander ? 15 : 10) * (totalTime - (*weaponFrame));
-                            }
-                        }
-                        // else we are in 'reload time'
-                        else
-                        {
-                            weaponYOffset -= (*weaponFrame < ((reloadTime - totalTime) / 2 + totalTime))
-                                             ? (isExpander ? 5 : 10) * ((*weaponFrame) - totalTime) // D
-                                             : 10 * (reloadTime - (*weaponFrame)); // U
-                        }
-                    }
-
-                    G_DrawWeaponTileUnfaded(weaponX + 184 - halfLookAng, weaponY + 240 - weaponYOffset, SHRINKER + 3 + ((*weaponFrame) & 3), -32, weaponBits,
-                                            isExpander ? 2 : 0, 0 /*W_SHRINKER_CRYSTAL*/);
-
-                    G_DrawWeaponTile(weaponX + 188 - halfLookAng, weaponY + 240 - weaponYOffset, SHRINKER + (isExpander ? -1 : 1), weaponShade,
-                                     weaponBits, weaponPal, 0 /*W_SHRINKER*/);
-
-                    break;
-                }
-
-                if ((*weaponFrame) < PWEAPON(screenpeek, pPlayer->curr_weapon, TotalTime) && (*weaponFrame) > 0)
-                {
-                    if (doAnim)
-                    {
-                        weaponX += wrand() & 3;
-                        weaponYOffset += (wrand() & 3);
-                    }
-
-                    G_DrawWeaponTileUnfaded(weaponX + 184 - halfLookAng, weaponY + 240 - weaponYOffset, SHRINKER + 3 + ((*weaponFrame) & 3), -32,
-                                            weaponBits & ~RS_LERP, isExpander ? 2 : 0, W_SHRINKER_CRYSTAL);
-                    G_DrawWeaponTile(weaponX + 188 - halfLookAng, weaponY + 240 - weaponYOffset, WT_WIDE(SHRINKER) + (isExpander ? -1 : 1), weaponShade,
-                                     weaponBits & ~RS_LERP, weaponPal, W_SHRINKER);
-                }
-                else
-                {
-                    G_DrawWeaponTileUnfaded(weaponX + 184 - halfLookAng, weaponY + 240 - weaponYOffset, SHRINKER + 2,
-                                            16 - (sintable[pPlayer->random_club_frame & 2047] >> 10), weaponBits | RS_FORCELERP,
-                                            isExpander ? 2 : 0, W_SHRINKER_CRYSTAL);
-                    G_DrawWeaponTile(weaponX + 188 - halfLookAng, weaponY + 240 - weaponYOffset, WT_WIDE(SHRINKER) + (isExpander ? -2 : 0), weaponShade,
-                                     weaponBits, weaponPal, W_SHRINKER);
-                }
-                break;
-            }
-            }
-#endif
-        }
-    }
-
-enddisplayweapon:;
-#ifndef EDUKE32_STANDALONE
-    P_DisplaySpit();
-#endif
-}
-
-#define TURBOTURNTIME (TICRATE/8) // 7
-#define NORMALTURN    15
-#define PREAMBLETURN  5
-#define NORMALKEYMOVE 40
-#define MAXVEL        ((NORMALKEYMOVE*2)+10)
-#define MAXSVEL       ((NORMALKEYMOVE*2)+10)
-#define MAXANGVEL     1024
-#define MAXHORIZVEL   256
-
-int32_t g_myAimMode, g_myAimStat, g_oldAimStat;
-int32_t mouseyaxismode = -1;
-double g_lastInputTicks;
-
-enum inputlock_t
-{
-    IL_NOANGLE = 0x1,
-    IL_NOHORIZ = 0x2,
-    IL_NOMOVE  = 0x4,
-
-    IL_NOTHING = IL_NOANGLE|IL_NOHORIZ|IL_NOMOVE,
-};
-
-static int P_CheckLockedMovement(int const playerNum)
-{
-    auto &     thisPlayer = g_player[playerNum];
-    auto const pPlayer    = thisPlayer.ps;
-
-    if (sprite[pPlayer->i].extra <= 0 || (pPlayer->dead_flag && !ud.god) || pPlayer->fist_incs || pPlayer->transporter_hold > 2 || (pPlayer->hard_landing && !FURY) || pPlayer->access_incs > 0
-        || pPlayer->knee_incs > 0
-        || (PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == TRIPBOMB_WEAPON && pPlayer->kickback_pic > 1
-            && pPlayer->kickback_pic < PWEAPON(playerNum, pPlayer->curr_weapon, FireDelay)))
-        return IL_NOTHING;
-
-    if (pPlayer->on_crane >= 0)
-        return IL_NOMOVE|IL_NOANGLE;
-
-    if (pPlayer->newowner != -1)
-        return IL_NOANGLE|IL_NOHORIZ;
-
-    if (pPlayer->return_to_center > 0 || thisPlayer.horizRecenter)
-        return IL_NOHORIZ;
-
-    return 0;
-}
-
-void P_UpdateAngles(int const playerNum, input_t &input)
-{
-    auto      &thisPlayer = g_player[playerNum];
-    auto const pPlayer    = thisPlayer.ps;
-
-    if (VM_HaveEvent(EVENT_PREUPDATEANGLES))
-    {
-        input_t pInput = thisPlayer.input;
-        thisPlayer.input = input;
-        VM_OnEvent(EVENT_PREUPDATEANGLES, pPlayer->i, playerNum);
-        input = thisPlayer.input;
-        thisPlayer.input = pInput;
-    }
-
-    auto const currentHiTicks    = timerGetFractionalTicks();
-    double     elapsedInputTicks = currentHiTicks - thisPlayer.lastViewUpdate;
-
-    if (!thisPlayer.lastViewUpdate)
-        elapsedInputTicks = 0;
-
-    thisPlayer.lastViewUpdate = currentHiTicks;
-
-    auto scaleToInterval = [=](double x) { return x * REALGAMETICSPERSEC / (1000.0 / min(elapsedInputTicks, 1000.0)); };
-
-    int const movementLocked = P_CheckLockedMovement(playerNum);
-
-    if ((movementLocked & IL_NOTHING) != IL_NOTHING)
-    {
-        if (!(movementLocked & IL_NOANGLE))
-            pPlayer->q16ang = fix16_sadd(pPlayer->q16ang, input.q16avel) & 0x7FFFFFF;
-
-        if (!(movementLocked & IL_NOHORIZ))
-        {
-            float horizAngle  = atan2f(pPlayer->q16horiz - F16(100), F16(128)) * (512.f / fPI) + fix16_to_float(input.q16horz);
-            pPlayer->q16horiz = F16(100) + Blrintf(F16(128) * tanf(horizAngle * (fPI / 512.f)));
-        }
-    }
-
-    // A horiz diff of 128 equal 45 degrees, so we convert horiz to 1024 angle units
-
-    if (thisPlayer.horizAngleAdjust)
-    {
-        float const horizAngle
-        = atan2f(pPlayer->q16horiz - F16(100), F16(128)) * (512.f / fPI) + scaleToInterval(thisPlayer.horizAngleAdjust);
-        pPlayer->q16horiz = F16(100) + Blrintf(F16(128) * tanf(horizAngle * (fPI / 512.f)));
-    }
-    else if (pPlayer->return_to_center > 0 || thisPlayer.horizRecenter)
-    {
-        pPlayer->q16horiz = fix16_sadd(pPlayer->q16horiz, fix16_from_float(scaleToInterval(fix16_to_float(F16(66.666) - fix16_sdiv(pPlayer->q16horiz, F16(1.5))))));
-
-        if ((!pPlayer->return_to_center && thisPlayer.horizRecenter) || (pPlayer->q16horiz >= F16(99.9) && pPlayer->q16horiz <= F16(100.1)))
-        {
-            pPlayer->q16horiz = F16(100);
-            pPlayer->return_to_center = 0;
-            thisPlayer.horizRecenter = false;
-        }
-    }
-    int const sectorLotag = pPlayer->cursectnum != -1 ? sector[pPlayer->cursectnum].lotag : 0;
-    // calculates automatic view angle for playing without a mouse
-    if (!pPlayer->aim_mode && pPlayer->on_ground && sectorLotag != ST_2_UNDERWATER && (sector[pPlayer->cursectnum].floorstat & 2))
-    {
-        // this is some kind of horse shit approximation of where the player is looking, I guess?
-        vec2_t const adjustedPosition = { pPlayer->pos.x + (sintable[(fix16_to_int(pPlayer->q16ang) + 512) & 2047] >> 5),
-                                          pPlayer->pos.y + (sintable[fix16_to_int(pPlayer->q16ang) & 2047] >> 5) };
-        int16_t currentSector = pPlayer->cursectnum;
-
-        updatesector(adjustedPosition.x, adjustedPosition.y, &currentSector);
-
-        if (currentSector >= 0)
-        {
-            int const slopeZ = yax_getflorzofslope(pPlayer->cursectnum, adjustedPosition);
-            if ((pPlayer->cursectnum == currentSector) || (klabs(yax_getflorzofslope(currentSector, adjustedPosition) - slopeZ) <= ZOFFSET6))
-                pPlayer->q16horizoff = fix16_sadd(pPlayer->q16horizoff, fix16_from_float(scaleToInterval(mulscale16(pPlayer->truefz - slopeZ, 160))));
-        }
-    }
-
-    // view centering only works if there's no input on the right stick (looking/aiming) and the player is moving forward/backward, not strafing
-    if (pPlayer->aim_mode&AM_CENTERING && !input.q16avel && !input.q16horz && input.fvel)
-    {
-        if (pPlayer->q16horiz >= F16(99) && pPlayer->q16horiz <= F16(100))
-            thisPlayer.horizRecenter = true;
-        else if (pPlayer->q16horiz < F16(99))
-            pPlayer->q16horiz = fix16_min(fix16_sadd(pPlayer->q16horiz, fix16_from_float(scaleToInterval(ud.config.JoystickViewCentering))), F16(100));
-        else if (pPlayer->q16horiz > F16(100))
-            pPlayer->q16horiz = fix16_max(fix16_ssub(pPlayer->q16horiz, fix16_from_float(scaleToInterval(ud.config.JoystickViewCentering))), F16(100));
-    }
-
-    int32_t Zvel, shootAng;
-
-// FIXME
-    if (pPlayer->aim_mode&AM_AIMASSIST && GetAutoAimAng(pPlayer->i, playerNum, 0, ZOFFSET3, 0 + 2, &pPlayer->pos, 256, &Zvel, &shootAng) != -1)
-    {
-        if (pPlayer->q16horiz == F16(100))
-        {
-            fix16_t const f      = F16(100) - pPlayer->q16horiz - pPlayer->q16horizoff;
-            fix16_t const target = Blrintf(F16(128) * tanf((Zvel / 32.f) * (fPI / 512.f)));
-            fix16_t const scaled = fix16_from_float(scaleToInterval(1.5));
-
-            if (f > target + scaled)
-                pPlayer->q16horizoff = fix16_sadd(pPlayer->q16horizoff, scaled);
-            else if (f < target - scaled)
-                pPlayer->q16horizoff = fix16_ssub(pPlayer->q16horizoff, scaled);
-        }
-    }
-    else if (pPlayer->q16horizoff > F16(1))
-        pPlayer->q16horizoff = fix16_ssub(pPlayer->q16horizoff, fix16_from_float(scaleToInterval(fix16_to_float((pPlayer->q16horizoff >> 3) + fix16_one))));
-    else if (pPlayer->q16horizoff < F16(-1))
-        pPlayer->q16horizoff = fix16_sadd(pPlayer->q16horizoff, fix16_from_float(scaleToInterval(fix16_to_float((-pPlayer->q16horizoff >> 3) + fix16_one))));
-    else if (pPlayer->q16horizoff >= F16(-1) && pPlayer->q16horizoff <= F16(1))
-        pPlayer->q16horizoff = 0;
-
-    if (thisPlayer.horizSkew)
-        pPlayer->q16horiz = fix16_sadd(pPlayer->q16horiz, fix16_from_float(scaleToInterval(thisPlayer.horizSkew)));
-
-    pPlayer->q16horiz    = fix16_clamp(pPlayer->q16horiz, F16(HORIZ_MIN), F16(HORIZ_MAX));
-    pPlayer->q16horizoff = fix16_clamp(pPlayer->q16horizoff, F16(HORIZ_MIN), F16(HORIZ_MAX));
-
-    if (VM_HaveEvent(EVENT_POSTUPDATEANGLES))
-    {
-        input_t pInput = thisPlayer.input;
-        thisPlayer.input = input;
-        VM_OnEvent(EVENT_POSTUPDATEANGLES, pPlayer->i, playerNum);
-        input = thisPlayer.input;
-        thisPlayer.input = pInput;
-    }
-}
-
-
-void P_GetInput(int const playerNum)
-{
-    auto      &thisPlayer = g_player[playerNum];
-    auto const pPlayer    = thisPlayer.ps;
-    ControlInfo info;
-
-    if (g_cheatBufLen > 1 || (pPlayer->gm & (MODE_MENU|MODE_TYPE)) || (ud.pause_on && !KB_KeyPressed(sc_Pause)) || g_saveRequested)
-    {
-        if (!(pPlayer->gm&MODE_MENU))
-            CONTROL_GetInput(&info);
-
-        thisPlayer.lastViewUpdate = 0;
-        localInput = {};
-        localInput.bits    = (((int32_t)g_gameQuit) << SK_GAMEQUIT);
-        localInput.extbits |= BIT(EK_CHAT_MODE);
-
-        return;
-    }
-
-    CONTROL_ProcessBinds();
-    
-    if (ud.mouseaiming)
-        g_myAimMode = BUTTON(gamefunc_Mouse_Aiming);
-    else
-    {
-        g_oldAimStat = g_myAimStat;
-        g_myAimStat  = BUTTON(gamefunc_Mouse_Aiming);
-
-        if (g_myAimStat > g_oldAimStat)
-        {
-            g_myAimMode ^= 1;
-            P_DoQuote(QUOTE_MOUSE_AIMING_OFF + g_myAimMode, pPlayer);
-        }
-    }
-
-    CONTROL_GetInput(&info);
-
-    if (ud.config.MouseBias)
-    {
-        if (klabs(info.mousex) > klabs(info.mousey))
-            info.mousey = tabledivide32_noinline(info.mousey, ud.config.MouseBias);
-        else
-            info.mousex = tabledivide32_noinline(info.mousex, ud.config.MouseBias);
-    }
-
-    if (ud.config.JoystickAimWeight)
-    {
-        int const absyaw = klabs(info.dyaw);
-        int const abspitch = klabs(info.dpitch);
-        //int const origyaw = info.dyaw;
-        //int const origpitch = info.dpitch;
-
-        if (absyaw > abspitch)
-        {
-            if (info.dpitch > 0)
-                info.dpitch = max(0, info.dpitch - tabledivide32_noinline(absyaw - abspitch, 8 - ud.config.JoystickAimWeight));
-            else if (info.dpitch < 0)
-                info.dpitch = min(0, info.dpitch + tabledivide32_noinline(absyaw - abspitch, 8 - ud.config.JoystickAimWeight));
-
-            //OSD_Printf("pitch %d -> %d\n",origpitch, info.dpitch);
-        }
-        else if (abspitch > absyaw)
-        {
-            if (info.dyaw > 0)
-                info.dyaw = max(0, info.dyaw - tabledivide32_noinline(abspitch - absyaw, 8 - ud.config.JoystickAimWeight));
-            else if (info.dyaw < 0)
-                info.dyaw = min(0, info.dyaw + tabledivide32_noinline(abspitch - absyaw, 8 - ud.config.JoystickAimWeight));
-
-            //OSD_Printf("yaw %d -> %d\n",origyaw, info.dyaw);
-        }
-    }
-
-    // JBF: Run key behaviour is selectable
-    int const       playerRunning = (ud.runkey_mode) ? (BUTTON(gamefunc_Run) | ud.auto_run) : (ud.auto_run ^ BUTTON(gamefunc_Run));
-    int const       turnAmount    = playerRunning ? (NORMALTURN << 1) : NORMALTURN;
-    int const       keyMove       = playerRunning ? (NORMALKEYMOVE << 1) : NORMALKEYMOVE;
-    constexpr float analogExtent  = 32767.f;  // KEEPINSYNC sdlayer.cpp
-
-    input_t input {};
-
-    auto const currentHiTicks    = timerGetFractionalTicks();
-    double     elapsedInputTicks = currentHiTicks - g_lastInputTicks;
-
-    if (!g_lastInputTicks)
-        elapsedInputTicks = 0;
-
-    g_lastInputTicks = currentHiTicks;
-
-    auto scaleToInterval = [=](double x) { return x * REALGAMETICSPERSEC / (1000.0 / min(elapsedInputTicks, 1000.0)); };
 
     if (BUTTON(gamefunc_Strafe))
+        mfsvel -= scrl_input.dyaw>>2;
+    mfsvel -= scrl_input.dx>>2;
+    mfvel = -scrl_input.dz>>2;
+
+#if 0
+    int const running = !!BUTTON(gamefunc_Run) ^ !!TEST(pp->Flags, PF_LOCK_RUN);
+    if (running)
     {
-        static int strafeyaw;
-
-        input.svel = -(info.mousex + strafeyaw) >> 3;
-        strafeyaw  = (info.mousex + strafeyaw) % 8;
-
-        input.svel -= lrint(scaleToInterval(info.dyaw * keyMove / analogExtent));
+        keymove = NORMALKEYMOVE << 1;
     }
     else
+#endif
     {
-        input.q16avel = fix16_sadd(input.q16avel, fix16_sdiv(fix16_from_int(info.mousex), F16(32)));
-        input.q16avel = fix16_sadd(input.q16avel, fix16_from_float(scaleToInterval(info.dyaw * 64.0 / analogExtent)));
+        keymove = NORMALKEYMOVE;
     }
 
-    if (g_myAimMode)
-        input.q16horz = fix16_sadd(input.q16horz, fix16_sdiv(fix16_from_int(info.mousey), F16(64)));
-    else
-        input.fvel = -(info.mousey >> 3);
-
-    if (ud.mouseflip) input.q16horz = -input.q16horz;
-
-    input.q16horz = fix16_ssub(input.q16horz, fix16_from_float(scaleToInterval(info.dpitch * 16.0 / analogExtent)));
-    input.svel -= lrint(scaleToInterval(info.dx * keyMove / analogExtent));
-    input.fvel -= lrint(scaleToInterval(info.dz * keyMove / analogExtent));
-    
-    if (BUTTON(gamefunc_Strafe))
+    if (!HelpInputMode && !ConPanel)
     {
-        if (!localInput.svel)
-        {
-            if (BUTTON(gamefunc_Turn_Left) && !(pPlayer->movement_lock & 4))
-                input.svel = keyMove;
-
-            if (BUTTON(gamefunc_Turn_Right) && !(pPlayer->movement_lock & 8))
-                input.svel = -keyMove;
-        }
-    }
-    else
-    {
-        static int32_t turnHeldTime;
-        static int32_t lastInputClock;  // MED
-        int32_t const  elapsedTics = (int32_t)totalclock - lastInputClock;
-
-        lastInputClock = (int32_t) totalclock;
-
         if (BUTTON(gamefunc_Turn_Left))
         {
-            turnHeldTime += elapsedTics;
-            input.q16avel = fix16_ssub(input.q16avel, fix16_from_float(scaleToInterval((turnHeldTime >= TURBOTURNTIME) ? (turnAmount << 1) : (PREAMBLETURN << 1))));
+            mfsvel -= -keymove;
         }
-        else if (BUTTON(gamefunc_Turn_Right))
+        if (BUTTON(gamefunc_Turn_Right))
         {
-            turnHeldTime += elapsedTics;
-            input.q16avel = fix16_sadd(input.q16avel, fix16_from_float(scaleToInterval((turnHeldTime >= TURBOTURNTIME) ? (turnAmount << 1) : (PREAMBLETURN << 1))));
+            mfsvel -= keymove;
+        }
+    }
+
+    if (!InputMode && !ConPanel)
+    {
+        if (BUTTON(gamefunc_Strafe_Left))
+        {
+            mfsvel += keymove;
+        }
+
+        if (BUTTON(gamefunc_Strafe_Right))
+        {
+            mfsvel += -keymove;
+        }
+    }
+
+    if (!UsingMenus && !HelpInputMode && !ConPanel)
+    {
+        if (BUTTON(gamefunc_Move_Forward))
+        {
+            mfvel += keymove;
+        }
+
+        if (BUTTON(gamefunc_Move_Backward))
+        {
+            mfvel += -keymove;
+        }
+    }
+
+    if (mfvel < -MAXVEL)
+        mfvel = -MAXVEL;
+    if (mfvel > MAXVEL)
+        mfvel = MAXVEL;
+    if (mfsvel < -MAXSVEL)
+        mfsvel = -MAXSVEL;
+    if (mfsvel > MAXSVEL)
+        mfsvel = MAXSVEL;
+
+    momx = mulscale9(mfvel, sintable[NORM_ANGLE(fix16_to_int(pp->q16ang) + 512)]);
+    momy = mulscale9(mfvel, sintable[NORM_ANGLE(fix16_to_int(pp->q16ang))]);
+
+    momx += mulscale9(mfsvel, sintable[NORM_ANGLE(fix16_to_int(pp->q16ang))]);
+    momy += mulscale9(mfsvel, sintable[NORM_ANGLE(fix16_to_int(pp->q16ang) + 1536)]);
+
+    //mfvel = momx;
+    //mfsvel = momy;
+
+    Follow_posx += momx;
+    Follow_posy += momy;
+
+    Follow_posx = max(Follow_posx, x_min_bound);
+    Follow_posy = max(Follow_posy, y_min_bound);
+    Follow_posx = min(Follow_posx, x_max_bound);
+    Follow_posy = min(Follow_posy, y_max_bound);
+
+}
+
+void
+DoPlayerMenuKeys(PLAYERp pp)
+{
+    if (!CommEnabled)
+    {
+        if (TEST_SYNC_KEY((pp), SK_AUTO_AIM))
+        {
+            if (FLAG_KEY_PRESSED(pp, SK_AUTO_AIM))
+            {
+                FLAG_KEY_RELEASE(pp, SK_AUTO_AIM);
+                FLIP(pp->Flags, PF_AUTO_AIM);
+            }
         }
         else
-            turnHeldTime = 0;
+            FLAG_KEY_RESET(pp, SK_AUTO_AIM);
+    }
+}
+
+void PlayerSectorBound(PLAYERp pp, int amt)
+{
+    if (pp->cursectnum < 9)
+        return;
+
+    int cz,fz;
+
+    // player should never go into a sector
+
+    // was getting some problems with this
+    // when jumping onto hight sloped sectors
+
+    // call this routine to make sure he doesn't
+    // called from DoPlayerMove() but can be called
+    // from anywhere it is needed
+
+    getzsofslope(pp->cursectnum, pp->posx, pp->posy, &cz, &fz);
+
+    if (pp->posz > fz - amt)
+        pp->posz = fz - amt;
+
+    if (pp->posz < cz + amt)
+        pp->posz = cz + amt;
+
+}
+
+void
+DoPlayerMove(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+    int friction;
+    int save_cstat;
+    int push_ret = 0;
+
+    // If SO interpolation is disabled, make sure the player's aiming,
+    // turning and movement still get appropriately interpolated.
+    // We do this from here instead of MovePlayer, covering the case
+    // the player gets pushed by a wall (e.g., on the boat in level 5).
+    SWBOOL interpolate_ride = pp->sop_riding && (!gs.InterpolateSO || CommEnabled);
+
+    void SlipSlope(PLAYERp pp);
+
+    SlipSlope(pp);
+
+    PLAYER_RUN_LOCK(pp);
+
+    DoPlayerTurn(pp, &pp->q16ang, pp->input.q16angvel);
+
+    pp->oldposx = pp->posx;
+    pp->oldposy = pp->posy;
+    pp->oldposz = pp->posz;
+    pp->lastcursectnum = pp->cursectnum;
+
+    if (PLAYER_MOVING(pp) == 0)
+        RESET(pp->Flags, PF_PLAYER_MOVED);
+    else
+        SET(pp->Flags, PF_PLAYER_MOVED);
+
+    DoPlayerSlide(pp);
+
+    pp->oxvect = pp->xvect;
+    pp->oyvect = pp->yvect;
+
+    pp->xvect += ((pp->input.vel*synctics*2)<<6);
+    pp->yvect += ((pp->input.svel*synctics*2)<<6);
+
+    friction = pp->friction;
+    if (!TEST(pp->Flags, PF_SWIMMING) && pp->WadeDepth)
+    {
+        friction -= pp->WadeDepth * 100L;
     }
 
-    if (localInput.svel < keyMove && localInput.svel > -keyMove)
-    {
-        if (BUTTON(gamefunc_Strafe_Left) && !(pPlayer->movement_lock & 4))
-            input.svel += keyMove;
+    pp->xvect  = mulscale16(pp->xvect, friction);
+    pp->yvect  = mulscale16(pp->yvect, friction);
 
-        if (BUTTON(gamefunc_Strafe_Right) && !(pPlayer->movement_lock & 8))
-            input.svel += -keyMove;
+    if (TEST(pp->Flags, PF_FLYING))
+    {
+        // do a bit of weighted averaging
+        pp->xvect = (pp->xvect + (pp->oxvect*1))/2;
+        pp->yvect = (pp->yvect + (pp->oyvect*1))/2;
+    }
+    else if (TEST(pp->Flags, PF_DIVING))
+    {
+        // do a bit of weighted averaging
+        pp->xvect = (pp->xvect + (pp->oxvect*2))/3;
+        pp->yvect = (pp->yvect + (pp->oyvect*2))/3;
     }
 
-    if (localInput.fvel < keyMove && localInput.fvel > -keyMove)
+    if (labs(pp->xvect) < 12800 && labs(pp->yvect) < 12800)
+        pp->xvect = pp->yvect = 0;
+
+    pp->SpriteP->xvel = FindDistance2D(pp->xvect,pp->yvect)>>14;
+
+    if (TEST(pp->Flags, PF_CLIP_CHEAT))
     {
-        if (BUTTON(gamefunc_Move_Forward) && !(pPlayer->movement_lock & 1))
-            input.fvel += keyMove;
-
-        if (BUTTON(gamefunc_Move_Backward) && !(pPlayer->movement_lock & 2))
-            input.fvel += -keyMove;
-    }
-
-    int weaponSelection;
-
-    for (weaponSelection = gamefunc_Weapon_10; weaponSelection >= gamefunc_Weapon_1; --weaponSelection)
-    {
-        if (BUTTON(weaponSelection))
+        short sectnum=pp->cursectnum;
+        if (interpolate_ride)
         {
-            weaponSelection -= (gamefunc_Weapon_1 - 1);
-            break;
+            pp->oposx = pp->posx;
+            pp->oposy = pp->posy;
         }
-    }
-
-    if (BUTTON(gamefunc_Last_Weapon))
-        weaponSelection = 14;
-    else if (BUTTON(gamefunc_Alt_Weapon))
-        weaponSelection = 13;
-    else if (BUTTON(gamefunc_Next_Weapon) || (BUTTON(gamefunc_Dpad_Select) && input.fvel > 0))
-        weaponSelection = 12;
-    else if (BUTTON(gamefunc_Previous_Weapon) || (BUTTON(gamefunc_Dpad_Select) && input.fvel < 0))
-        weaponSelection = 11;
-    else if (weaponSelection == gamefunc_Weapon_1-1)
-        weaponSelection = 0;
-
-    if (weaponSelection && (localInput.bits & SK_WEAPON_MASK) == 0)
-        localInput.bits |= (weaponSelection << SK_WEAPON_BITS);
-
-    localInput.bits |= (BUTTON(gamefunc_Fire) << SK_FIRE);
-    localInput.bits |= (BUTTON(gamefunc_Open) << SK_OPEN);
-
-    int const sectorLotag = pPlayer->cursectnum != -1 ? sector[pPlayer->cursectnum].lotag : 0;
-    int const crouchable = sectorLotag != 2 && (sectorLotag != 1 || pPlayer->spritebridge) && !pPlayer->jetpack_on;
-
-    if (pPlayer->cheat_phase < 1)
-    {
-        if (BUTTON(gamefunc_Toggle_Crouch))
-        {
-            pPlayer->crouch_toggle = !pPlayer->crouch_toggle && crouchable;
-
-            if (crouchable)
-                CONTROL_ClearButton(gamefunc_Toggle_Crouch);
-        }
-
-        if (BUTTON(gamefunc_Crouch) || BUTTON(gamefunc_Jump) || pPlayer->jetpack_on || (!crouchable && pPlayer->on_ground))
-            pPlayer->crouch_toggle = 0;
-
-        int const crouching = BUTTON(gamefunc_Crouch) || BUTTON(gamefunc_Toggle_Crouch) || pPlayer->crouch_toggle;
-
-        localInput.bits |= (BUTTON(gamefunc_Jump) << SK_JUMP) | (crouching << SK_CROUCH);
-    }
-
-    localInput.bits |= (BUTTON(gamefunc_Aim_Up) || (BUTTON(gamefunc_Dpad_Aiming) && input.fvel > 0)) << SK_AIM_UP;
-    localInput.bits |= (BUTTON(gamefunc_Aim_Down) || (BUTTON(gamefunc_Dpad_Aiming) && input.fvel < 0)) << SK_AIM_DOWN;
-    localInput.bits |= (BUTTON(gamefunc_Center_View) << SK_CENTER_VIEW);
-
-    localInput.bits |= (BUTTON(gamefunc_Look_Left) << SK_LOOK_LEFT) | (BUTTON(gamefunc_Look_Right) << SK_LOOK_RIGHT);
-    localInput.bits |= (BUTTON(gamefunc_Look_Up) << SK_LOOK_UP) | (BUTTON(gamefunc_Look_Down) << SK_LOOK_DOWN);
-
-    localInput.bits |= (playerRunning << SK_RUN);
-
-    localInput.bits |= (BUTTON(gamefunc_Inventory_Left) || (BUTTON(gamefunc_Dpad_Select) && (input.svel > 0 || input.q16avel < 0))) << SK_INV_LEFT;
-    localInput.bits |= (BUTTON(gamefunc_Inventory_Right) || (BUTTON(gamefunc_Dpad_Select) && (input.svel < 0 || input.q16avel > 0))) << SK_INV_RIGHT;
-    localInput.bits |= (BUTTON(gamefunc_Inventory) << SK_INVENTORY);
-
-    localInput.bits |= (BUTTON(gamefunc_Steroids) << SK_STEROIDS) | (BUTTON(gamefunc_NightVision) << SK_NIGHTVISION);
-    localInput.bits |= (BUTTON(gamefunc_MedKit) << SK_MEDKIT) | (BUTTON(gamefunc_Holo_Duke) << SK_HOLODUKE);
-    localInput.bits |= (BUTTON(gamefunc_Jetpack) << SK_JETPACK);
-
-    localInput.bits |= BUTTON(gamefunc_Holster_Weapon) << SK_HOLSTER;
-    localInput.bits |= BUTTON(gamefunc_Quick_Kick) << SK_QUICK_KICK;
-    localInput.bits |= BUTTON(gamefunc_TurnAround) << SK_TURNAROUND;
-
-    localInput.bits |= (g_myAimMode << SK_AIMMODE);
-    localInput.bits |= (g_gameQuit << SK_GAMEQUIT);
-    localInput.bits |= KB_KeyPressed(sc_Pause) << SK_PAUSE;
-    localInput.bits |= ((uint32_t)KB_KeyPressed(sc_Escape)) << SK_ESCAPE;
-
-    if (BUTTON(gamefunc_Dpad_Select))
-    {
-        input.fvel = 0;
-        input.svel = 0;
-        input.q16avel = 0;
-    }
-    else if (BUTTON(gamefunc_Dpad_Aiming))
-        input.fvel = 0;
-
-    if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_SEMIAUTO && BUTTON(gamefunc_Fire))
-        CONTROL_ClearButton(gamefunc_Fire);
-
-    localInput.extbits |= (BUTTON(gamefunc_Move_Forward) || (input.fvel > 0)) << EK_MOVE_FORWARD;
-    localInput.extbits |= (BUTTON(gamefunc_Move_Backward) || (input.fvel < 0)) << EK_MOVE_BACKWARD;
-    localInput.extbits |= (BUTTON(gamefunc_Strafe_Left) || (input.svel > 0)) << EK_STRAFE_LEFT;
-    localInput.extbits |= (BUTTON(gamefunc_Strafe_Right) || (input.svel < 0)) << EK_STRAFE_RIGHT;
-    localInput.extbits |= BUTTON(gamefunc_Turn_Left) << EK_TURN_LEFT;
-    localInput.extbits |= BUTTON(gamefunc_Turn_Right) << EK_TURN_RIGHT;
-    localInput.extbits |= BUTTON(gamefunc_Alt_Fire) << EK_ALT_FIRE;
-
-    if (CONTROL_LastSeenInput == LastSeenInput::Joystick)
-    {
-        localInput.extbits |= (!!ud.config.JoystickViewCentering) << EK_GAMEPAD_CENTERING;
-        localInput.extbits |= (!!ud.config.JoystickAimAssist) << EK_GAMEPAD_AIM_ASSIST;
-    }
-
-    // for access in the events
-    input.bits = localInput.bits;
-    input.extbits = localInput.extbits;
-
-    if (!ud.recstat)
-        P_UpdateAngles(playerNum, input);
-
-    // in case bits were altered
-    localInput.bits = input.bits;
-    localInput.extbits = input.extbits;
-
-    int const movementLocked = P_CheckLockedMovement(playerNum);
-
-    if ((ud.scrollmode && ud.overhead_on) || (movementLocked & IL_NOTHING) == IL_NOTHING)
-    {
-        if (ud.scrollmode && ud.overhead_on)
-        {
-            ud.folfvel = input.fvel;
-            ud.folsvel = input.svel;
-            ud.folavel = fix16_to_int(input.q16avel);
-        }
-
-        localInput.fvel = localInput.svel = 0;
-        localInput.q16avel = localInput.q16horz = 0;
+        pp->posx += pp->xvect >> 14;
+        pp->posy += pp->yvect >> 14;
+        COVERupdatesector(pp->posx, pp->posy, &sectnum);
+        if (sectnum != -1)
+            pp->cursectnum = sectnum;
     }
     else
     {
-        if (!(movementLocked & IL_NOMOVE))
+        push_ret = pushmove(&pp->pos, &pp->cursectnum, ((int)pp->SpriteP->clipdist<<2), pp->ceiling_dist, pp->floor_dist - Z(16), CLIPMASK_PLAYER);
+
+        if (push_ret < 0)
         {
-            localInput.fvel = clamp(localInput.fvel + input.fvel, -MAXVEL, MAXVEL);
-            localInput.svel = clamp(localInput.svel + input.svel, -MAXSVEL, MAXSVEL);
+            if (!TEST(pp->Flags, PF_DEAD))
+            {
+                PlayerUpdateHealth(pp, -u->Health);  // Make sure he dies!
+                PlayerCheckDeath(pp, -1);
+
+                if (TEST(pp->Flags, PF_DEAD))
+                    return;
+            }
         }
 
-        if (!(movementLocked & IL_NOANGLE))
-            localInput.q16avel = fix16_sadd(localInput.q16avel, input.q16avel);
-
-        if (!(movementLocked & IL_NOHORIZ))
+        if (interpolate_ride)
         {
-            float horizAngle   = atan2f(localInput.q16horz, F16(128)) * (512.f / fPI) + fix16_to_float(input.q16horz);
-            localInput.q16horz = fix16_clamp(Blrintf(F16(128) * tanf(horizAngle * (fPI / 512.f))), F16(-MAXHORIZVEL), F16(MAXHORIZVEL));
+            pp->oposx = pp->posx;
+            pp->oposy = pp->posy;
         }
+
+        save_cstat = pp->SpriteP->cstat;
+        RESET(pp->SpriteP->cstat, CSTAT_SPRITE_BLOCK);
+        COVERupdatesector(pp->posx, pp->posy, &pp->cursectnum);
+        clipmove(&pp->pos, &pp->cursectnum, pp->xvect, pp->yvect, ((int)pp->SpriteP->clipdist<<2), pp->ceiling_dist, pp->floor_dist, CLIPMASK_PLAYER);
+        pp->SpriteP->cstat = save_cstat;
+        PlayerCheckValidMove(pp);
+
+        push_ret = pushmove(&pp->pos, &pp->cursectnum, ((int)pp->SpriteP->clipdist<<2), pp->ceiling_dist, pp->floor_dist - Z(16), CLIPMASK_PLAYER);
+        if (push_ret < 0)
+        {
+
+            if (!TEST(pp->Flags, PF_DEAD))
+            {
+                PlayerUpdateHealth(pp, -u->Health);  // Make sure he dies!
+                PlayerCheckDeath(pp, -1);
+
+                if (TEST(pp->Flags, PF_DEAD))
+                    return;
+            }
+        }
+    }
+
+    if (interpolate_ride)
+    {
+        pp->oposz = pp->posz;
+        pp->oq16ang = pp->q16ang;
+    }
+
+    // check for warp - probably can remove from CeilingHit
+    if (WarpPlane(&pp->posx, &pp->posy, &pp->posz, &pp->cursectnum))
+        PlayerWarpUpdatePos(pp);
+
+    DoPlayerZrange(pp);
+
+    //PlayerSectorBound(pp, Z(1));
+
+    DoPlayerSetWadeDepth(pp);
+
+    DoPlayerHorizon(pp, &pp->q16horiz, pp->input.q16aimvel);
+
+    if (pp->cursectnum >= 0 && TEST(sector[pp->cursectnum].extra, SECTFX_DYNAMIC_AREA))
+    {
+        if (TEST(pp->Flags, PF_FLYING|PF_JUMPING|PF_FALLING))
+        {
+            if (pp->posz > pp->loz)
+                pp->posz = pp->loz - PLAYER_HEIGHT;
+
+            if (pp->posz < pp->hiz)
+                pp->posz = pp->hiz + PLAYER_HEIGHT;
+        }
+        else if (TEST(pp->Flags, PF_SWIMMING|PF_DIVING))
+        {
+            if (pp->posz > pp->loz)
+                pp->posz = pp->loz - PLAYER_SWIM_HEIGHT;
+
+            if (pp->posz < pp->hiz)
+                pp->posz = pp->hiz + PLAYER_SWIM_HEIGHT;
+        }
+        // moved to crawling and running respectively
+#if 0
+        else if (TEST(pp->Flags, PF_CRAWLING))
+        {
+            pp->posz = pp->loz - PLAYER_CRAWL_HEIGHT;
+        }
+        else
+        {
+            if (pp->posz > pp->loz)
+                pp->posz = pp->loz - PLAYER_HEIGHT;
+
+            if (pp->posz < pp->hiz)
+                pp->posz = pp->hiz + PLAYER_HEIGHT;
+            pp->posz = pp->loz - PLAYER_HEIGHT;
+        }
+#endif
+    }
+}
+
+void
+DoPlayerSectorUpdatePreMove(PLAYERp pp)
+{
+    short sectnum = pp->cursectnum;
+
+    if (sectnum < 0)
+        return;
+
+    if (TEST(sector[pp->cursectnum].extra, SECTFX_DYNAMIC_AREA))
+    {
+        updatesectorz(pp->posx, pp->posy, pp->posz, &sectnum);
+        if (sectnum < 0)
+        {
+            sectnum = pp->cursectnum;
+            COVERupdatesector(pp->posx, pp->posy, &sectnum);
+        }
+        ASSERT(sectnum >= 0);
+    }
+    else if (FAF_ConnectArea(sectnum))
+    {
+        updatesectorz(pp->posx, pp->posy, pp->posz, &sectnum);
+        if (sectnum < 0)
+        {
+            sectnum = pp->cursectnum;
+            COVERupdatesector(pp->posx, pp->posy, &sectnum);
+        }
+        ASSERT(sectnum >= 0);
+    }
+
+    pp->cursectnum = sectnum;
+}
+
+void
+DoPlayerSectorUpdatePostMove(PLAYERp pp)
+{
+    short sectnum = pp->cursectnum;
+    int fz,cz;
+
+    // need to do updatesectorz if in connect area
+    if (sectnum >= 0 && FAF_ConnectArea(sectnum))
+    {
+        updatesectorz(pp->posx, pp->posy, pp->posz, &pp->cursectnum);
+
+        // can mess up if below
+        if (pp->cursectnum < 0)
+        {
+            pp->cursectnum = sectnum;
+
+            // adjust the posz to be in a sector
+            getzsofslope(pp->cursectnum, pp->posx, pp->posy, &cz, &fz);
+            if (pp->posz > fz)
+                pp->posz = fz;
+
+            if (pp->posz < cz)
+                pp->posz = cz;
+
+            // try again
+            updatesectorz(pp->posx, pp->posy, pp->posz, &pp->cursectnum);
+            // ASSERT(pp->cursectnum >= 0);
+        }
+    }
+    else
+    {
+        PlayerSectorBound(pp, Z(1));
     }
 
 }
 
-static int32_t P_DoCounters(int playerNum)
+void PlaySOsound(short sectnum, short sound_num)
 {
-    auto const pPlayer = g_player[playerNum].ps;
+    short i,nexti;
 
-#ifndef EDUKE32_STANDALONE
-    if (FURY)
-        goto access_incs; // I'm sorry
-
-    if (pPlayer->invdisptime > 0)
-        pPlayer->invdisptime--;
-
-    if (pPlayer->tipincs > 0)
-        pPlayer->tipincs--;
-
-    if (pPlayer->last_pissed_time > 0)
+    // play idle sound - sound 1
+    TRAVERSE_SPRITE_SECT(headspritesect[sectnum], i, nexti)
     {
-        switch (--pPlayer->last_pissed_time)
+        if (sprite[i].statnum == STAT_SOUND_SPOT)
         {
-            case GAMETICSPERSEC * 219:
-            {
-                A_PlaySound(FLUSH_TOILET, pPlayer->i);
-                if (playerNum == screenpeek || GTFLAGS(GAMETYPE_COOPSOUND))
-                    A_PlaySound(DUKE_PISSRELIEF, pPlayer->i);
-            }
-            break;
-            case GAMETICSPERSEC * 218:
-            {
-                pPlayer->holster_weapon = 0;
-                pPlayer->weapon_pos     = WEAPON_POS_RAISE;
-            }
-            break;
+            DoSoundSpotStopSound(sprite[i].lotag);
+            DoSoundSpotMatch(sprite[i].lotag, sound_num, 0);
         }
     }
+}
 
-    if (pPlayer->crack_time > 0)
+void StopSOsound(short sectnum)
+{
+    short i,nexti;
+
+    // play idle sound - sound 1
+    TRAVERSE_SPRITE_SECT(headspritesect[sectnum], i, nexti)
     {
-        if (--pPlayer->crack_time == 0)
-        {
-            pPlayer->knuckle_incs = 1;
-            pPlayer->crack_time   = PCRACKTIME;
-        }
+        if (sprite[i].statnum == STAT_SOUND_SPOT)
+            DoSoundSpotStopSound(sprite[i].lotag);
+    }
+}
+
+void
+DoPlayerMoveBoat(PLAYERp pp)
+{
+    int z;
+    int floor_dist;
+    short save_sectnum;
+    SECTOR_OBJECTp sop = pp->sop;
+
+    SW_PACKET last_input;
+    int fifo_ndx;
+
+    if (Prediction)
+        return;
+
+    if (!Prediction)
+    {
+        // this code looks at the fifo to get the last value for comparison
+        fifo_ndx = (movefifoplc-2) & (MOVEFIFOSIZ - 1);
+        last_input = pp->inputfifo[fifo_ndx];
+
+        if (labs(pp->input.vel|pp->input.svel) && !labs(last_input.vel|last_input.svel))
+            PlaySOsound(pp->sop->mid_sector,SO_DRIVE_SOUND);
+        else if (!labs(pp->input.vel|pp->input.svel) && labs(last_input.vel|last_input.svel))
+            PlaySOsound(pp->sop->mid_sector,SO_IDLE_SOUND);
     }
 
-    if (pPlayer->inv_amount[GET_STEROIDS] > 0 && pPlayer->inv_amount[GET_STEROIDS] < 400)
-    {
-        if (--pPlayer->inv_amount[GET_STEROIDS] == 0)
-            P_SelectNextInvItem(pPlayer);
+    PLAYER_RUN_LOCK(pp);
 
-        if (!(pPlayer->inv_amount[GET_STEROIDS] & 7))
-            if (playerNum == screenpeek || GTFLAGS(GAMETYPE_COOPSOUND))
-                A_PlaySound(DUKE_HARTBEAT, pPlayer->i);
+    DoPlayerTurnBoat(pp);
+
+    if (PLAYER_MOVING(pp) == 0)
+        RESET(pp->Flags, PF_PLAYER_MOVED);
+    else
+        SET(pp->Flags, PF_PLAYER_MOVED);
+
+    pp->oxvect = pp->xvect;
+    pp->oyvect = pp->yvect;
+
+    if (sop->drive_speed)
+    {
+        pp->xvect = mulscale6(pp->input.vel, sop->drive_speed);
+        pp->yvect = mulscale6(pp->input.svel, sop->drive_speed);
+
+        // does sliding/momentum
+        pp->xvect = (pp->xvect + (pp->oxvect*(sop->drive_slide-1)))/sop->drive_slide;
+        pp->yvect = (pp->yvect + (pp->oyvect*(sop->drive_slide-1)))/sop->drive_slide;
+    }
+    else
+    {
+        pp->xvect += ((pp->input.vel*synctics*2)<<6);
+        pp->yvect += ((pp->input.svel*synctics*2)<<6);
+
+        pp->xvect  = mulscale16(pp->xvect, BOAT_FRICTION);
+        pp->yvect  = mulscale16(pp->yvect, BOAT_FRICTION);
+
+        // does sliding/momentum
+        pp->xvect = (pp->xvect + (pp->oxvect*5))/6;
+        pp->yvect = (pp->yvect + (pp->oyvect*5))/6;
     }
 
-    if (pPlayer->heat_on && pPlayer->inv_amount[GET_HEATS] > 0)
-    {
-        if (--pPlayer->inv_amount[GET_HEATS] == 0)
-        {
-            pPlayer->heat_on = 0;
-            P_SelectNextInvItem(pPlayer);
-            A_PlaySound(NITEVISION_ONOFF, pPlayer->i);
-            P_UpdateScreenPal(pPlayer);
-        }
-    }
+    if (labs(pp->xvect) < 12800 && labs(pp->yvect) < 12800)
+        pp->xvect = pp->yvect = 0;
 
-    if (pPlayer->holoduke_on >= 0)
-    {
-        if (--pPlayer->inv_amount[GET_HOLODUKE] <= 0)
-        {
-            A_PlaySound(TELEPORTER, pPlayer->i);
-            pPlayer->holoduke_on = -1;
-            P_SelectNextInvItem(pPlayer);
-        }
-    }
+    pp->lastcursectnum = pp->cursectnum;
+    z = pp->posz + Z(10);
 
-    if (pPlayer->jetpack_on && pPlayer->inv_amount[GET_JETPACK] > 0)
-    {
-        if (--pPlayer->inv_amount[GET_JETPACK] <= 0)
-        {
-            pPlayer->jetpack_on = 0;
-            P_SelectNextInvItem(pPlayer);
-            A_PlaySound(DUKE_JETPACK_OFF, pPlayer->i);
-            S_StopEnvSound(DUKE_JETPACK_IDLE, pPlayer->i);
-            S_StopEnvSound(DUKE_JETPACK_ON, pPlayer->i);
-        }
-    }
+    save_sectnum = pp->cursectnum;
+    OperateSectorObject(pp->sop, fix16_to_int(pp->q16ang), MAXSO, MAXSO);
+    pp->cursectnum = pp->sop->op_main_sector; // for speed
 
-    if (pPlayer->quick_kick > 0 && sprite[pPlayer->i].pal != 1)
-    {
-        pPlayer->last_quick_kick = pPlayer->quick_kick + 1;
+    floor_dist = labs(z - pp->sop->floor_loz);
+    clipmove_old(&pp->posx, &pp->posy, &z, &pp->cursectnum, pp->xvect, pp->yvect, (int)pp->sop->clipdist, Z(4), floor_dist, CLIPMASK_PLAYER);
 
-        if (--pPlayer->quick_kick == 8)
-            A_Shoot(pPlayer->i, KNEE);
-    }
-    else if (pPlayer->last_quick_kick > 0)
-        --pPlayer->last_quick_kick;
+    OperateSectorObject(pp->sop, fix16_to_int(pp->q16ang), pp->posx, pp->posy);
+    pp->cursectnum = save_sectnum; // for speed
 
-access_incs:
+    DoPlayerHorizon(pp, &pp->q16horiz, pp->input.q16aimvel);
+}
+
+#if 0
+STATE s_TankTreadMove[] =
+{
+    {755, 6|SF_WALL_ANIM, NULL, s_TankTreadMove[1]},
+    {756, 6|SF_WALL_ANIM, NULL, s_TankTreadMove[0]},
+};
+
+STATE s_TankTreadStill[] =
+{
+    {755, 6|SF_WALL_ANIM, NULL, s_TankTreadMove[0]},
+};
 #endif
 
-    if (pPlayer->access_incs && sprite[pPlayer->i].pal != 1)
+void DoTankTreads(PLAYERp pp)
+{
+    SPRITEp sp;
+    short i,nexti;
+    int vel;
+    SECTORp *sectp;
+    int j;
+    int dot;
+    SWBOOL reverse = FALSE;
+
+    if (Prediction)
+        return;
+
+    vel = FindDistance2D(pp->xvect>>8, pp->yvect>>8);
+    dot = DOT_PRODUCT_2D(pp->xvect, pp->yvect, sintable[NORM_ANGLE(fix16_to_int(pp->q16ang)+512)], sintable[fix16_to_int(pp->q16ang)]);
+    if (dot < 0)
+        reverse = TRUE;
+
+    for (sectp = pp->sop->sectp, j = 0; *sectp; sectp++, j++)
     {
-        ++pPlayer->access_incs;
-
-        if (sprite[pPlayer->i].extra <= 0)
-            pPlayer->access_incs = 12;
-
-        if (pPlayer->access_incs == 12)
+        TRAVERSE_SPRITE_SECT(headspritesect[*sectp - sector], i, nexti)
         {
-            if (pPlayer->access_spritenum >= 0)
+            sp = &sprite[i];
+
+            // BOOL1 is set only if pans with SO
+            if (!TEST_BOOL1(sp))
+                continue;
+
+#if 0
+            if (sp->statnum == STAT_WALL_ANIM)
             {
-                P_ActivateSwitch(playerNum, pPlayer->access_spritenum, 1);
-                switch (sprite[pPlayer->access_spritenum].pal)
+                if (SP_TAG3(sp) == TANK_TREAD_WALL_ANIM)
                 {
-                    case 0: pPlayer->got_access  &= (0xffff - 0x1); break;
-                    case 21: pPlayer->got_access &= (0xffff - 0x2); break;
-                    case 23: pPlayer->got_access &= (0xffff - 0x4); break;
-                }
-                pPlayer->access_spritenum = -1;
-            }
-            else
-            {
-                P_ActivateSwitch(playerNum,pPlayer->access_wallnum,0);
-                switch (wall[pPlayer->access_wallnum].pal)
-                {
-                    case 0: pPlayer->got_access  &= (0xffff - 0x1); break;
-                    case 21: pPlayer->got_access &= (0xffff - 0x2); break;
-                    case 23: pPlayer->got_access &= (0xffff - 0x4); break;
-                }
-            }
-        }
-
-        if (pPlayer->access_incs > 20)
-        {
-            pPlayer->access_incs  = 0;
-            pPlayer->weapon_pos   = WEAPON_POS_RAISE;
-            pPlayer->kickback_pic = 0;
-        }
-    }
-
-    if (pPlayer->cursectnum >= 0 && pPlayer->scuba_on == 0 && sector[pPlayer->cursectnum].lotag == ST_2_UNDERWATER)
-    {
-        if (pPlayer->inv_amount[GET_SCUBA] > 0)
-        {
-            pPlayer->scuba_on   = 1;
-            pPlayer->inven_icon = ICON_SCUBA;
-            P_DoQuote(QUOTE_SCUBA_ON, pPlayer);
-        }
-        else
-        {
-            if (pPlayer->airleft > 0)
-                --pPlayer->airleft;
-            else
-            {
-                pPlayer->extra_extra8 += 32;
-                if (pPlayer->last_extra < (pPlayer->max_player_health >> 1) && (pPlayer->last_extra & 3) == 0)
-                    A_PlaySound(DUKE_LONGTERM_PAIN, pPlayer->i);
-            }
-        }
-    }
-    else if (pPlayer->inv_amount[GET_SCUBA] > 0 && pPlayer->scuba_on)
-    {
-        pPlayer->inv_amount[GET_SCUBA]--;
-        if (pPlayer->inv_amount[GET_SCUBA] == 0)
-        {
-            pPlayer->scuba_on = 0;
-            P_SelectNextInvItem(pPlayer);
-        }
-    }
-
-#ifndef EDUKE32_STANDALONE
-    if (!FURY && pPlayer->knuckle_incs)
-    {
-        if (++pPlayer->knuckle_incs == 10)
-        {
-            if (!WW2GI)
-            {
-                if (totalclock > 1024)
-                    if (playerNum == screenpeek || GTFLAGS(GAMETYPE_COOPSOUND))
+                    if (vel)
                     {
-                        if (wrand()&1)
-                            A_PlaySound(DUKE_CRACK,pPlayer->i);
-                        else A_PlaySound(DUKE_CRACK2,pPlayer->i);
+                        if (u->StateStart != s_TankTreadMove)
+                            ChangeState(i, s_TankTreadMove);
                     }
+                    else
+                    {
+                        if (u->StateStart != s_TankTreadStill)
+                            ChangeState(i, s_TankTreadStill);
+                    }
+                }
+            }
+            else
+#endif
+            if (sp->statnum == STAT_WALL_PAN)
+            {
+                if (reverse)
+                {
+                    if (!TEST_BOOL2(sp))
+                    {
+                        SET_BOOL2(sp);
+                        sp->ang = NORM_ANGLE(sp->ang + 1024);
+                    }
+                }
+                else
+                {
+                    if (TEST_BOOL2(sp))
+                    {
+                        RESET_BOOL2(sp);
+                        sp->ang = NORM_ANGLE(sp->ang + 1024);
+                    }
+                }
 
-                A_PlaySound(DUKE_CRACK_FIRST,pPlayer->i);
+                SP_TAG5(sp) = vel;
+            }
+            else if (sp->statnum == STAT_FLOOR_PAN)
+            {
+                sp = &sprite[i];
+
+                if (reverse)
+                {
+                    if (!TEST_BOOL2(sp))
+                    {
+                        SET_BOOL2(sp);
+                        sp->ang = NORM_ANGLE(sp->ang + 1024);
+                    }
+                }
+                else
+                {
+                    if (TEST_BOOL2(sp))
+                    {
+                        RESET_BOOL2(sp);
+                        sp->ang = NORM_ANGLE(sp->ang + 1024);
+                    }
+                }
+
+                SP_TAG5(sp) = vel;
+            }
+            else if (sp->statnum == STAT_CEILING_PAN)
+            {
+                sp = &sprite[i];
+
+                if (reverse)
+                {
+                    if (!TEST_BOOL2(sp))
+                    {
+                        SET_BOOL2(sp);
+                        sp->ang = NORM_ANGLE(sp->ang + 1024);
+                    }
+                }
+                else
+                {
+                    if (TEST_BOOL2(sp))
+                    {
+                        RESET_BOOL2(sp);
+                        sp->ang = NORM_ANGLE(sp->ang + 1024);
+                    }
+                }
+
+                SP_TAG5(sp) = vel;
             }
         }
-        else if (pPlayer->knuckle_incs == 22 || TEST_SYNC_KEY(g_player[playerNum].input.bits, SK_FIRE))
-            pPlayer->knuckle_incs=0;
-
-        return 1;
     }
-#endif
 
-    return 0;
+
 }
 
-int16_t WeaponPickupSprites[MAX_WEAPONS] = { KNEE__, FIRSTGUNSPRITE__, SHOTGUNSPRITE__,
-        CHAINGUNSPRITE__, RPGSPRITE__, HEAVYHBOMB__, SHRINKERSPRITE__, DEVISTATORSPRITE__,
-        TRIPBOMBSPRITE__, FREEZESPRITE__, HEAVYHBOMB__, SHRINKERSPRITE__, FLAMETHROWERSPRITE__
-                                           };
-// this is used for player deaths
-void P_DropWeapon(int const playerNum)
+void
+SetupDriveCrush(PLAYERp pp, int *x, int *y)
 {
-    auto const pPlayer       = g_player[playerNum].ps;
-    int const  currentWeapon = PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike);
+    int radius = pp->sop_control->clipdist;
 
-    if ((unsigned)currentWeapon >= MAX_WEAPONS)
+    x[0] = pp->posx - radius;
+    y[0] = pp->posy - radius;
+
+    x[1] = pp->posx + radius;
+    y[1] = pp->posy - radius;
+
+    x[2] = pp->posx + radius;
+    y[2] = pp->posy + radius;
+
+    x[3] = pp->posx - radius;
+    y[3] = pp->posy + radius;
+}
+
+void
+DriveCrush(PLAYERp pp, int *x, int *y)
+{
+    int testpointinquad(int x, int y, int *qx, int *qy);
+
+    SECTOR_OBJECTp sop = pp->sop_control;
+    SPRITEp sp;
+    USERp u;
+    int i,nexti;
+    short stat;
+    SECTORp *sectp;
+
+    if (MoveSkip4 == 0)
         return;
 
-    if (krand() & 1)
-        A_Spawn(pPlayer->i, WeaponPickupSprites[currentWeapon]);
-#ifndef EDUKE32_STANDALONE
-    else if (!FURY)
-        switch (PWEAPON(playerNum, currentWeapon, WorksLike))
+    // not moving - don't crush
+    if ((pp->xvect|pp->yvect) == 0 && pp->input.q16angvel == 0)
+        return;
+
+    // main sector
+    TRAVERSE_SPRITE_SECT(headspritesect[sop->op_main_sector], i, nexti)
+    {
+        sp = &sprite[i];
+        u = User[i];
+
+        if (testpointinquad(sp->x, sp->y, x, y))
         {
-            case RPG_WEAPON:
-            case HANDBOMB_WEAPON: A_Spawn(pPlayer->i, EXPLOSION2); break;
-        }
-#endif
-}
+            if (TEST(sp->extra, SPRX_BREAKABLE) && HitBreakSprite(i,0))
+                continue;
 
-void P_AddAmmo(DukePlayer_t * const pPlayer, int const weaponNum, int const addAmount)
-{
-    pPlayer->ammo_amount[weaponNum] += addAmount;
+            if (sp->statnum == STAT_MISSILE)
+                continue;
 
-    if (pPlayer->ammo_amount[weaponNum] > pPlayer->max_ammo_amount[weaponNum])
-        pPlayer->ammo_amount[weaponNum] = pPlayer->max_ammo_amount[weaponNum];
-}
+            if (sp->picnum == ST1)
+                continue;
 
-static void P_AddWeaponNoSwitch(DukePlayer_t * const p, int const weaponNum)
-{
-    int const playerNum = P_Get(p->i);  // PASS_SNUM?
+            if (TEST(sp->extra, SPRX_PLAYER_OR_ENEMY))
+            {
+                if (!TEST(u->Flags, SPR_DEAD) && !TEST(sp->extra, SPRX_BREAKABLE))
+                    continue;
+            }
 
-    if ((p->gotweapon & (1<<weaponNum)) == 0)
-    {
-        p->gotweapon |= (1<<weaponNum);
+            if (TEST(sp->cstat, CSTAT_SPRITE_INVISIBLE))
+                continue;
 
-#ifndef EDUKE32_STANDALONE
-        if (!FURY && weaponNum == SHRINKER_WEAPON)
-            p->gotweapon |= (1<<GROW_WEAPON);
-#endif
-    }
+            if (sp->statnum > STAT_DONT_DRAW)
+                continue;
 
-    if (PWEAPON(playerNum, p->curr_weapon, SelectSound) > 0)
-        S_StopEnvSound(PWEAPON(playerNum, p->curr_weapon, SelectSound), p->i);
+            if (sp->z < sop->crush_z)
+                continue;
 
-    if (PWEAPON(playerNum, weaponNum, SelectSound) > 0)
-        A_PlaySound(PWEAPON(playerNum, weaponNum, SelectSound), p->i);
-}
-
-static void P_ChangeWeapon(DukePlayer_t * const pPlayer, int const weaponNum)
-{
-    int const    playerNum     = P_Get(pPlayer->i);  // PASS_SNUM?
-    int8_t const currentWeapon = pPlayer->curr_weapon;
-
-    if (pPlayer->reloading)
-        return;
-
-    int eventReturn = 0;
-
-    if (pPlayer->curr_weapon != weaponNum && VM_HaveEvent(EVENT_CHANGEWEAPON))
-        eventReturn = VM_OnEventWithReturn(EVENT_CHANGEWEAPON,pPlayer->i, playerNum, weaponNum);
-
-    if (eventReturn == -1)
-        return;
-
-    if (eventReturn != -2)
-        pPlayer->curr_weapon = weaponNum;
-
-    pPlayer->random_club_frame = 0;
-
-    if (pPlayer->weapon_pos == 0)
-    {
-        pPlayer->weapon_pos = -1;
-        pPlayer->last_weapon = currentWeapon;
-    }
-    else if ((unsigned)pPlayer->weapon_pos < WEAPON_POS_RAISE)
-    {
-        pPlayer->weapon_pos = -pPlayer->weapon_pos;
-        pPlayer->last_weapon = currentWeapon;
-    }
-    else if (pPlayer->last_weapon == weaponNum)
-    {
-        pPlayer->last_weapon = -1;
-        pPlayer->weapon_pos = -pPlayer->weapon_pos;
-    }
-
-    if (pPlayer->holster_weapon)
-    {
-        pPlayer->weapon_pos = WEAPON_POS_RAISE;
-        pPlayer->holster_weapon = 0;
-        pPlayer->last_weapon = -1;
-    }
-
-    if (currentWeapon != pPlayer->curr_weapon &&
-        !(PWEAPON(playerNum, currentWeapon, WorksLike) == HANDREMOTE_WEAPON && PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == HANDBOMB_WEAPON) &&
-        !(PWEAPON(playerNum, currentWeapon, WorksLike) == HANDBOMB_WEAPON && PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == HANDREMOTE_WEAPON))
-    {
-        pPlayer->last_used_weapon = currentWeapon;
-    }
-
-    pPlayer->kickback_pic = 0;
-
-    P_SetWeaponGamevars(playerNum, pPlayer);
-}
-
-void P_AddWeapon(DukePlayer_t *pPlayer, int weaponNum, int switchWeapon)
-{
-    P_AddWeaponNoSwitch(pPlayer, weaponNum);
-
-    if (switchWeapon)
-        P_ChangeWeapon(pPlayer, weaponNum);
-}
-
-void P_SelectNextInvItem(DukePlayer_t *pPlayer)
-{
-    if (pPlayer->inv_amount[GET_FIRSTAID] > 0)
-        pPlayer->inven_icon = ICON_FIRSTAID;
-    else if (pPlayer->inv_amount[GET_STEROIDS] > 0)
-        pPlayer->inven_icon = ICON_STEROIDS;
-    else if (pPlayer->inv_amount[GET_JETPACK] > 0)
-        pPlayer->inven_icon = ICON_JETPACK;
-    else if (pPlayer->inv_amount[GET_HOLODUKE] > 0)
-        pPlayer->inven_icon = ICON_HOLODUKE;
-    else if (pPlayer->inv_amount[GET_HEATS] > 0)
-        pPlayer->inven_icon = ICON_HEATS;
-    else if (pPlayer->inv_amount[GET_SCUBA] > 0)
-        pPlayer->inven_icon = ICON_SCUBA;
-    else if (pPlayer->inv_amount[GET_BOOTS] > 0)
-        pPlayer->inven_icon = ICON_BOOTS;
-    else
-        pPlayer->inven_icon = ICON_NONE;
-}
-
-void P_CheckWeapon(DukePlayer_t *pPlayer)
-{
-    if (pPlayer->reloading || (unsigned)pPlayer->curr_weapon >= MAX_WEAPONS)
-        return;
-
-    int playerNum, weaponNum;
-
-    if (pPlayer->wantweaponfire >= 0)
-    {
-        weaponNum = pPlayer->wantweaponfire;
-        pPlayer->wantweaponfire = -1;
-
-        if (weaponNum == pPlayer->curr_weapon)
-            return;
-
-        if ((pPlayer->gotweapon & (1<<weaponNum)) && pPlayer->ammo_amount[weaponNum] > 0)
-        {
-            P_AddWeapon(pPlayer, weaponNum, 1);
-            return;
+            SpriteQueueDelete(i);
+            KillSprite(i);
         }
     }
 
-    weaponNum = pPlayer->curr_weapon;
-
-    if ((pPlayer->gotweapon & (1<<weaponNum)) && (pPlayer->ammo_amount[weaponNum] > 0 || !(pPlayer->weaponswitch & 2)))
-        return;
-
-    playerNum  = P_Get(pPlayer->i);
-
-    int wpnInc = 0;
-
-    for (wpnInc = 0; wpnInc <= FREEZE_WEAPON; ++wpnInc)
+    // all enemys
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_ENEMY], i, nexti)
     {
-        weaponNum = g_player[playerNum].wchoice[wpnInc];
-        if (VOLUMEONE && weaponNum > SHRINKER_WEAPON)
+        sp = &sprite[i];
+
+        if (testpointinquad(sp->x, sp->y, x, y))
+        {
+            //if (sp->z < pp->posz)
+            if (sp->z < sop->crush_z)
+                continue;
+
+            int32_t const vel = FindDistance2D(pp->xvect>>8, pp->yvect>>8);
+            if (vel < 9000)
+            {
+                DoActorBeginSlide(i, getangle(pp->xvect, pp->yvect), vel/8, 5);
+                if (DoActorSlide(i))
+                    continue;
+            }
+
+            UpdateSinglePlayKills(i);
+
+            if (SpawnShrap(i, -99))
+                SetSuicide(i);
+            else
+                KillSprite(i);
+        }
+    }
+
+    // all dead actors
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_DEAD_ACTOR], i, nexti)
+    {
+        sp = &sprite[i];
+
+        if (testpointinquad(sp->x, sp->y, x, y))
+        {
+            if (sp->z < sop->crush_z)
+                continue;
+
+            SpriteQueueDelete(i);
+            KillSprite(i);
+        }
+    }
+
+    // all players
+    for (stat = 0; stat < MAX_SW_PLAYERS; stat++)
+    {
+        i = headspritestat[STAT_PLAYER0 + stat];
+
+        if (i < 0)
             continue;
 
-        if (weaponNum == KNEE_WEAPON)
-            weaponNum = FREEZE_WEAPON;
-        else weaponNum--;
+        sp = &sprite[i];
+        u = User[i];
 
-        if (weaponNum == KNEE_WEAPON || ((pPlayer->gotweapon & (1<<weaponNum)) && pPlayer->ammo_amount[weaponNum] > 0))
-            break;
-    }
+        if (u->PlayerP == pp)
+            continue;
 
-    if (wpnInc == HANDREMOTE_WEAPON)
-        weaponNum = KNEE_WEAPON;
-
-    // Found the weapon
-
-    P_ChangeWeapon(pPlayer, weaponNum);
-}
-
-static void DoWallTouchDamage(const DukePlayer_t *pPlayer, int32_t wallNum)
-{
-    vec3_t const davect = { pPlayer->pos.x + (sintable[(fix16_to_int(pPlayer->q16ang) + 512) & 2047] >> 9),
-                      pPlayer->pos.y + (sintable[fix16_to_int(pPlayer->q16ang) & 2047] >> 9), pPlayer->pos.z };
-
-    A_DamageWall(pPlayer->i, wallNum, davect, -1);
-}
-
-static void P_CheckTouchDamage(DukePlayer_t *pPlayer, int touchObject)
-{
-    if ((touchObject = VM_OnEventWithReturn(EVENT_CHECKTOUCHDAMAGE, pPlayer->i, P_Get(pPlayer->i), touchObject)) == -1)
-        return;
-
-    if ((touchObject & 49152) == 49152)
-    {
-#ifndef EDUKE32_STANDALONE
-        int const touchSprite = touchObject & (MAXSPRITES - 1);
-
-        if (!FURY && sprite[touchSprite].picnum == CACTUS)
+        if (testpointinquad(sp->x, sp->y, x, y))
         {
-            if (pPlayer->hurt_delay < 8)
-            {
-                sprite[pPlayer->i].extra -= 5;
+            int damage;
 
-                pPlayer->hurt_delay = 16;
-                P_PalFrom(pPlayer, 32, 32, 0, 0);
-                A_PlaySound(DUKE_LONGTERM_PAIN, pPlayer->i);
-            }
-        }
-#endif
-        return;
-    }
+            //if (sp->z < pp->posz)
+            if (sp->z < sop->crush_z)
+                continue;
 
-    if ((touchObject & 49152) != 32768)
-        return;
-
-    int const touchWall = touchObject & (MAXWALLS-1);
-
-    if (pPlayer->hurt_delay > 0)
-        pPlayer->hurt_delay--;
-    else if (wall[touchWall].cstat & FORCEFIELD_CSTAT)
-    {
-        int const forcePic = G_GetForcefieldPicnum(touchWall);
-
-        switch (tileGetMapping(forcePic))
-        {
-        case W_FORCEFIELD__:
-            sprite[pPlayer->i].extra -= 5;
-
-            pPlayer->hurt_delay = 16;
-            P_PalFrom(pPlayer, 32, 32,0,0);
-
-            pPlayer->vel.x = -(sintable[(fix16_to_int(pPlayer->q16ang)+512)&2047]<<8);
-            pPlayer->vel.y = -(sintable[(fix16_to_int(pPlayer->q16ang))&2047]<<8);
-
-#ifndef EDUKE32_STANDALONE
-            if (!FURY)
-                A_PlaySound(DUKE_LONGTERM_PAIN,pPlayer->i);
-#endif
-            DoWallTouchDamage(pPlayer, touchWall);
-            break;
-
-        case BIGFORCE__:
-            pPlayer->hurt_delay = GAMETICSPERSEC;
-            DoWallTouchDamage(pPlayer, touchWall);
-            break;
+            damage = -(u->Health + 100);
+            PlayerDamageSlide(u->PlayerP, damage, fix16_to_int(pp->q16ang));
+            PlayerUpdateHealth(u->PlayerP, damage);
+            //PlayerCheckDeath(u->PlayerP, -1);
+            PlayerCheckDeath(u->PlayerP, pp->PlayerSprite);
         }
     }
-}
 
-static int P_CheckFloorDamage(DukePlayer_t *pPlayer, int floorTexture)
-{
-    auto const pSprite = &sprite[pPlayer->i];
 
-    if ((unsigned)(floorTexture = VM_OnEventWithReturn(EVENT_CHECKFLOORDAMAGE, pPlayer->i, P_Get(pPlayer->i), floorTexture)) >= MAXTILES)
-        return 0;
-
-    switch (tileGetMapping(floorTexture))
+    // if it ends up actually in the drivable sector kill it
+    for (sectp = sop->sectp; *sectp; sectp++)
     {
-        case HURTRAIL__:
-            if (rnd(32))
+        TRAVERSE_SPRITE_SECT(headspritesect[(*sectp) - sector], i, nexti)
+        {
+            sp = &sprite[i];
+            u = User[i];
+
+            // give some extra buffer
+            if (sp->z < sop->crush_z + Z(40))
+                continue;
+
+            if (TEST(sp->extra, SPRX_PLAYER_OR_ENEMY))
             {
-                if (pPlayer->inv_amount[GET_BOOTS] > 0)
-                    return 1;
-                else
+                if (sp->statnum == STAT_ENEMY)
                 {
-#ifndef EDUKE32_STANDALONE
-                    if (!FURY)
-                    {
-                        if (!A_CheckSoundPlaying(pPlayer->i, DUKE_LONGTERM_PAIN))
-                            A_PlaySound(DUKE_LONGTERM_PAIN, pPlayer->i);
-
-                        if (!A_CheckSoundPlaying(pPlayer->i, SHORT_CIRCUIT))
-                            A_PlaySound(SHORT_CIRCUIT, pPlayer->i);
-                    }
-#endif
-
-                    P_PalFrom(pPlayer, 32, 64, 64, 64);
-                    pSprite->extra -= 1 + (krand() & 3);
-
-                    return 0;
+                    if (SpawnShrap(i, -99))
+                        SetSuicide(i);
+                    else
+                        KillSprite(i);
                 }
             }
-            break;
-
-        case FLOORSLIME__:
-            if (rnd(16))
-            {
-                if (pPlayer->inv_amount[GET_BOOTS] > 0)
-                    return 1;
-                else
-                {
-#ifndef EDUKE32_STANDALONE
-                    if (!FURY && !A_CheckSoundPlaying(pPlayer->i, DUKE_LONGTERM_PAIN))
-                        A_PlaySound(DUKE_LONGTERM_PAIN, pPlayer->i);
-#endif
-
-                    P_PalFrom(pPlayer, 32, 0, 8, 0);
-                    pSprite->extra -= 1 + (krand() & 3);
-
-                    return 0;
-                }
-            }
-            break;
-
-#ifndef EDUKE32_STANDALONE
-        case FLOORPLASMA__:
-            if (!FURY && rnd(32))
-            {
-                if (pPlayer->inv_amount[GET_BOOTS] > 0)
-                    return 1;
-                else
-                {
-                    if (!A_CheckSoundPlaying(pPlayer->i, DUKE_LONGTERM_PAIN))
-                        A_PlaySound(DUKE_LONGTERM_PAIN, pPlayer->i);
-
-                    P_PalFrom(pPlayer, 32, 8, 0, 0);
-                    pSprite->extra -= 1 + (krand() & 3);
-
-                    return 0;
-                }
-            }
-            break;
-#endif
+        }
     }
-
-    return 0;
 }
 
-
-int P_FindOtherPlayer(int playerNum, int32_t *pDist)
+void
+DoPlayerMoveTank(PLAYERp pp)
 {
-    int closestPlayer     = playerNum;
-    int closestPlayerDist = INT32_MAX;
+    int z;
+    int floor_dist;
+    short save_sectnum;
+    SPRITEp sp = pp->sop->sp_child;
+    USERp u = User[sp - sprite];
+    int save_cstat;
+    int x[4], y[4], ox[4], oy[4];
+    int wallcount;
+    int count=0;
 
-    for (bssize_t TRAVERSE_CONNECT(otherPlayer))
+    SECTORp *sectp;
+    SECTOR_OBJECTp sop = pp->sop;
+    WALLp wp;
+    int j,k;
+    short startwall,endwall;
+
+    SW_PACKET last_input;
+    int fifo_ndx;
+    SWBOOL RectClip = !!TEST(sop->flags, SOBJ_RECT_CLIP);
+
+    if (Prediction)
+        return;
+
+    if (!Prediction)
     {
-        if (playerNum != otherPlayer && sprite[g_player[otherPlayer].ps->i].extra > 0)
-        {
-            int otherPlayerDist = klabs(g_player[otherPlayer].ps->opos.x - g_player[playerNum].ps->pos.x) +
-                                  klabs(g_player[otherPlayer].ps->opos.y - g_player[playerNum].ps->pos.y) +
-                                  (klabs(g_player[otherPlayer].ps->opos.z - g_player[playerNum].ps->pos.z) >> 4);
+        // this code looks at the fifo to get the last value for comparison
+        fifo_ndx = (movefifoplc-2) & (MOVEFIFOSIZ - 1);
+        last_input = pp->inputfifo[fifo_ndx];
 
-            if (otherPlayerDist < closestPlayerDist)
+        if (labs(pp->input.vel|pp->input.svel) && !labs(last_input.vel|last_input.svel))
+            PlaySOsound(pp->sop->mid_sector,SO_DRIVE_SOUND);
+        else if (!labs(pp->input.vel|pp->input.svel) && labs(last_input.vel|last_input.svel))
+            PlaySOsound(pp->sop->mid_sector,SO_IDLE_SOUND);
+    }
+
+    PLAYER_RUN_LOCK(pp);
+
+    if (PLAYER_MOVING(pp) == 0)
+        RESET(pp->Flags, PF_PLAYER_MOVED);
+    else
+        SET(pp->Flags, PF_PLAYER_MOVED);
+
+    pp->oxvect = pp->xvect;
+    pp->oyvect = pp->yvect;
+
+    if (sop->drive_speed)
+    {
+        pp->xvect = mulscale6(pp->input.vel, sop->drive_speed);
+        pp->yvect = mulscale6(pp->input.svel, sop->drive_speed);
+
+        // does sliding/momentum
+        pp->xvect = (pp->xvect + (pp->oxvect*(sop->drive_slide-1)))/sop->drive_slide;
+        pp->yvect = (pp->yvect + (pp->oyvect*(sop->drive_slide-1)))/sop->drive_slide;
+    }
+    else
+    {
+        pp->xvect += ((pp->input.vel*synctics*2)<<6);
+        pp->yvect += ((pp->input.svel*synctics*2)<<6);
+
+        pp->xvect  = mulscale16(pp->xvect, TANK_FRICTION);
+        pp->yvect  = mulscale16(pp->yvect, TANK_FRICTION);
+
+        pp->xvect = (pp->xvect + (pp->oxvect*1))/2;
+        pp->yvect = (pp->yvect + (pp->oyvect*1))/2;
+    }
+
+    if (labs(pp->xvect) < 12800 && labs(pp->yvect) < 12800)
+        pp->xvect = pp->yvect = 0;
+
+    pp->lastcursectnum = pp->cursectnum;
+    z = pp->posz + Z(10);
+
+    if (RectClip)
+    {
+        for (sectp = sop->sectp, wallcount = 0, j = 0; *sectp; sectp++, j++)
+        {
+            startwall = (*sectp)->wallptr;
+            endwall = startwall + (*sectp)->wallnum - 1;
+
+            for (wp = &wall[startwall], k = startwall; k <= endwall; wp++, k++)
             {
-                closestPlayer     = otherPlayer;
-                closestPlayerDist = otherPlayerDist;
+                if (wp->extra && TEST(wp->extra, WALLFX_LOOP_OUTER|WALLFX_LOOP_OUTER_SECONDARY) == WALLFX_LOOP_OUTER)
+                {
+                    x[count] = wp->x;
+                    y[count] = wp->y;
+
+                    ox[count] = sop->xmid - sop->xorig[wallcount];
+                    oy[count] = sop->ymid - sop->yorig[wallcount];
+
+                    count++;
+                }
+
+                wallcount++;
+            }
+        }
+
+        PRODUCTION_ASSERT(count == 4);
+    }
+
+    save_sectnum = pp->cursectnum;
+    OperateSectorObject(pp->sop, fix16_to_int(pp->q16ang), MAXSO, MAXSO);
+    pp->cursectnum = pp->sop->op_main_sector; // for speed
+
+    floor_dist = labs(z - pp->sop->floor_loz);
+
+
+    if (RectClip)
+    {
+        hitdata_t hitinfo;
+        int vel;
+        int ret;
+
+        save_cstat = pp->SpriteP->cstat;
+        RESET(pp->SpriteP->cstat, CSTAT_SPRITE_BLOCK);
+        DoPlayerTurnTankRect(pp, x, y, ox, oy);
+
+        ret = RectClipMove(pp, x, y);
+        DriveCrush(pp, x, y);
+        pp->SpriteP->cstat = save_cstat;
+
+        if (!ret)
+        {
+            vel = FindDistance2D(pp->xvect>>8, pp->yvect>>8);
+
+            if (vel > 13000)
+            {
+                vec3_t hit_pos = { DIV2(x[0] + x[1]), DIV2(y[0] + y[1]), sector[pp->cursectnum].floorz - Z(10) };
+
+                hitscan(&hit_pos, pp->cursectnum,
+                        //pp->xvect, pp->yvect, 0,
+                        MOVEx(256, fix16_to_int(pp->q16ang)), MOVEy(256, fix16_to_int(pp->q16ang)), 0,
+                        &hitinfo, CLIPMASK_PLAYER);
+
+                ////DSPRINTF(ds,"hitinfo.sect %d, hitinfo.wall %d, hitinfo.x %d, hitinfo.y %d, hitinfo.z %d",hitinfo.sect, hitinfo.wall, hitinfo.x, hitinfo.y, hitinfo.z);
+                //MONO_PRINT(ds);
+
+                if (FindDistance2D(hitinfo.x - hit_pos.x, hitinfo.y - hit_pos.y) < 800)
+                {
+                    if (hitinfo.wall >= 0)
+                        u->ret = hitinfo.wall|HIT_WALL;
+                    else if (hitinfo.sprite >= 0)
+                        u->ret = hitinfo.sprite|HIT_SPRITE;
+                    else
+                        u->ret = 0;
+
+                    VehicleMoveHit(sp - sprite);
+                }
+
+                if (!TEST(sop->flags, SOBJ_NO_QUAKE))
+                {
+                    SetPlayerQuake(pp);
+                }
+            }
+
+            if (vel > 12000)
+            {
+                pp->xvect = pp->yvect = pp->oxvect = pp->oyvect = 0;
             }
         }
     }
-
-    *pDist = closestPlayerDist;
-
-    return closestPlayer;
-}
-
-void P_FragPlayer(int playerNum)
-{
-    auto const pPlayer = g_player[playerNum].ps;
-    auto const pSprite = &sprite[pPlayer->i];
-
-    if (g_netClient) // [75] The server should not overwrite its own randomseed
-        randomseed = ticrandomseed;
-
-    if (pSprite->pal != 1)
+    else
     {
-        P_PalFrom(pPlayer, 63, 63, 0, 0);
-        I_AddForceFeedback(pPlayer->max_player_health << FF_PLAYER_DMG_SCALE, pPlayer->max_player_health << FF_PLAYER_DMG_SCALE, pPlayer->max_player_health << FF_PLAYER_TIME_SCALE);
+        DoPlayerTurnTank(pp, z, floor_dist);
 
-        pPlayer->pos.z -= ZOFFSET2;
-        pSprite->z -= ZOFFSET2;
-
-        pPlayer->dead_flag = (512 - ((krand() & 1) << 10) + (krand() & 255) - 512) & 2047;
-
-        if (pPlayer->dead_flag == 0)
-            pPlayer->dead_flag++;
-
-#ifndef NETCODE_DISABLE
-        if (g_netServer)
-        {
-            // this packet might not be needed anymore with the new snapshot code
-            packbuf[0] = PACKET_FRAG;
-            packbuf[1] = playerNum;
-            packbuf[2] = pPlayer->frag_ps;
-            packbuf[3] = actor[pPlayer->i].htpicnum;
-            B_BUF32(&packbuf[4], ticrandomseed);
-            packbuf[8] = myconnectindex;
-
-            enet_host_broadcast(g_netServer, CHAN_GAMESTATE, enet_packet_create(&packbuf[0], 9, ENET_PACKET_FLAG_RELIABLE));
-        }
-#endif
-    }
-
-#ifndef EDUKE32_STANDALONE
-    if (!FURY)
-    {
-        pPlayer->jetpack_on  = 0;
-        pPlayer->holoduke_on = -1;
-
-        S_StopEnvSound(DUKE_JETPACK_IDLE, pPlayer->i);
-
-        if (pPlayer->scream_voice > FX_Ok)
-        {
-            FX_StopSound(pPlayer->scream_voice);
-            S_Cleanup();
-            pPlayer->scream_voice = -1;
-        }
-    }
-#endif
-
-    if (pSprite->pal != 1 && (pSprite->cstat & 32768) == 0)
-        pSprite->cstat = 0;
-
-    if ((g_netServer || ud.multimode > 1) && (pSprite->pal != 1 || (pSprite->cstat & 32768)))
-    {
-        if (pPlayer->frag_ps != playerNum)
-        {
-            if (GTFLAGS(GAMETYPE_TDM) && g_player[pPlayer->frag_ps].ps->team == g_player[playerNum].ps->team)
-                g_player[pPlayer->frag_ps].ps->fraggedself++;
-            else
-            {
-                g_player[pPlayer->frag_ps].ps->frag++;
-                g_player[pPlayer->frag_ps].frags[playerNum]++;
-                g_player[playerNum].frags[playerNum]++;  // deaths
-            }
-
-            if (playerNum == screenpeek)
-            {
-                Bsprintf(apStrings[QUOTE_RESERVED], "Killed by %s", &g_player[pPlayer->frag_ps].user_name[0]);
-                P_DoQuote(QUOTE_RESERVED, pPlayer);
-            }
-            else
-            {
-                Bsprintf(apStrings[QUOTE_RESERVED2], "Killed %s", &g_player[playerNum].user_name[0]);
-                P_DoQuote(QUOTE_RESERVED2, g_player[pPlayer->frag_ps].ps);
-            }
-
-            if (ud.obituaries)
-            {
-                Bsprintf(tempbuf, apStrings[OBITQUOTEINDEX + (krand() % g_numObituaries)],
-                         &g_player[pPlayer->frag_ps].user_name[0], &g_player[playerNum].user_name[0]);
-                G_AddUserQuote(tempbuf);
-            }
-            else
-                krand();
-        }
+        save_cstat = pp->SpriteP->cstat;
+        RESET(pp->SpriteP->cstat, CSTAT_SPRITE_BLOCK);
+        if (pp->sop->clipdist)
+            u->ret = clipmove_old(&pp->posx, &pp->posy, &z, &pp->cursectnum, pp->xvect, pp->yvect, (int)pp->sop->clipdist, Z(4), floor_dist, CLIPMASK_PLAYER);
         else
-        {
-            if (actor[pPlayer->i].htpicnum != APLAYERTOP)
-            {
-                pPlayer->fraggedself++;
-                if ((unsigned)pPlayer->wackedbyactor < MAXSPRITES && A_CheckEnemyTile(sprite[pPlayer->wackedbyactor].picnum))
-                    Bsprintf(tempbuf, apStrings[OBITQUOTEINDEX + (krand() % g_numObituaries)], "A monster",
-                             &g_player[playerNum].user_name[0]);
-                else if (actor[pPlayer->i].htpicnum == NUKEBUTTON)
-                    Bsprintf(tempbuf, "^02%s^02 tried to leave", &g_player[playerNum].user_name[0]);
-                else
-                {
-                    // random suicide death string
-                    Bsprintf(tempbuf, apStrings[SUICIDEQUOTEINDEX + (krand() % g_numSelfObituaries)],
-                             &g_player[playerNum].user_name[0]);
-                }
-            }
-            else
-                Bsprintf(tempbuf, "^02%s^02 switched to team %d", &g_player[playerNum].user_name[0], pPlayer->team + 1);
+            u->ret = MultiClipMove(pp, z, floor_dist);
+        pp->SpriteP->cstat = save_cstat;
 
-            if (ud.obituaries)
-                G_AddUserQuote(tempbuf);
+        //SetupDriveCrush(pp, x, y);
+        //DriveCrush(pp, x, y);
+
+        if (u->ret)
+        {
+            int vel;
+
+            vel = FindDistance2D(pp->xvect>>8, pp->yvect>>8);
+
+            if (vel > 13000)
+            {
+                VehicleMoveHit(sp - sprite);
+                pp->slide_xvect = -pp->xvect<<1;
+                pp->slide_yvect = -pp->yvect<<1;
+                if (!TEST(sop->flags, SOBJ_NO_QUAKE))
+                    SetPlayerQuake(pp);
+            }
+
+            if (vel > 12000)
+            {
+                pp->xvect = pp->yvect = pp->oxvect = pp->oyvect = 0;
+            }
         }
-        pPlayer->frag_ps = playerNum;
-        pus              = NUMPAGES;
+    }
+
+    OperateSectorObject(pp->sop, fix16_to_int(pp->q16ang), pp->posx, pp->posy);
+    pp->cursectnum = save_sectnum; // for speed
+
+    DoPlayerHorizon(pp, &pp->q16horiz, pp->input.q16aimvel);
+
+    DoTankTreads(pp);
+}
+
+void
+DoPlayerMoveTurret(PLAYERp pp)
+{
+    PLAYER_RUN_LOCK(pp);
+
+    DoPlayerTurnTurret(pp);
+
+    if (PLAYER_MOVING(pp) == 0)
+        RESET(pp->Flags, PF_PLAYER_MOVED);
+    else
+        SET(pp->Flags, PF_PLAYER_MOVED);
+
+    OperateSectorObject(pp->sop, fix16_to_int(pp->q16ang), pp->sop->xmid, pp->sop->ymid);
+
+    DoPlayerHorizon(pp, &pp->q16horiz, pp->input.q16aimvel);
+}
+
+void
+DoPlayerBeginJump(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    SET(pp->Flags, PF_JUMPING);
+    RESET(pp->Flags, PF_FALLING);
+    RESET(pp->Flags, PF_CRAWLING);
+    RESET(pp->Flags, PF_LOCK_CRAWL);
+    SET(pp->Flags2, PF2_INPUT_CAN_TURN|PF2_INPUT_CAN_AIM);
+
+    pp->floor_dist = PLAYER_JUMP_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_JUMP_CEILING_DIST;
+    pp->friction = PLAYER_JUMP_FRICTION;
+
+    PlayerGravity = PLAYER_JUMP_GRAV;
+
+    pp->jump_speed = PLAYER_JUMP_AMT + pp->WadeDepth * 4;
+
+    if (DoPlayerWadeSuperJump(pp))
+    {
+        pp->jump_speed = PLAYER_JUMP_AMT - pp->WadeDepth * 5;
+    }
+
+    pp->JumpDuration = MAX_JUMP_DURATION;
+    pp->DoPlayerAction = DoPlayerJump;
+
+    ///DamageData[u->WeaponNum].Init(pp);
+
+    NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Jump);
+}
+
+void
+DoPlayerBeginForceJump(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    SET(pp->Flags, PF_JUMPING);
+    RESET(pp->Flags, PF_FALLING|PF_CRAWLING|PF_CLIMBING|PF_LOCK_CRAWL);
+    SET(pp->Flags2, PF2_INPUT_CAN_TURN|PF2_INPUT_CAN_AIM);
+
+    pp->JumpDuration = MAX_JUMP_DURATION;
+    pp->DoPlayerAction = DoPlayerForceJump;
+
+    pp->floor_dist = PLAYER_JUMP_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_JUMP_CEILING_DIST;
+    pp->friction = PLAYER_JUMP_FRICTION;
+
+    PlayerGravity = PLAYER_JUMP_GRAV;
+
+    ///DamageData[u->WeaponNum].Init(pp);
+
+    NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Jump);
+}
+
+void
+DoPlayerJump(PLAYERp pp)
+{
+    short i;
+
+    // reset flag key for double jumps
+    if (!TEST_SYNC_KEY(pp, SK_JUMP))
+    {
+        FLAG_KEY_RESET(pp, SK_JUMP);
+    }
+
+    // instead of multiplying by synctics, use a loop for greater accuracy
+    for (i = 0; i < synctics; i++)
+    {
+        // PlayerGravity += synctics;  // See how increase gravity as we go?
+        if (TEST_SYNC_KEY(pp, SK_JUMP))
+        {
+            if (pp->JumpDuration > 0)
+            {
+                pp->jump_speed -= PlayerGravity;
+                pp->JumpDuration--;
+            }
+        }
+
+        // adjust jump speed by gravity - if jump speed greater than 0 player
+        // have started falling
+        if ((pp->jump_speed += PlayerGravity) > 0)
+        {
+            DoPlayerBeginFall(pp);
+            DoPlayerFall(pp);
+            return;
+        }
+
+        // adjust height by jump speed
+        pp->posz += pp->jump_speed;
+
+        // if player gets to close the ceiling while jumping
+        //if (pp->posz < pp->hiz + Z(4))
+        if (PlayerCeilingHit(pp, pp->hiz + Z(4)))
+        {
+            // put player at the ceiling
+            pp->posz = pp->hiz + Z(4);
+
+            // reverse your speed to falling
+            pp->jump_speed = -pp->jump_speed;
+
+            // start falling
+            DoPlayerBeginFall(pp);
+            DoPlayerFall(pp);
+            return;
+        }
+
+        // added this because jumping up to slopes or jumping on steep slopes
+        // sometimes caused the view to go into the slope
+        // if player gets to close the floor while jumping
+        if (PlayerFloorHit(pp, pp->loz - pp->floor_dist))
+        {
+            pp->posz = pp->loz - pp->floor_dist;
+
+            pp->jump_speed = 0;
+            PlayerSectorBound(pp, Z(1));
+            DoPlayerBeginRun(pp);
+            DoPlayerHeight(pp);
+            return;
+        }
+    }
+
+    if (PlayerFlyKey())
+    {
+        DoPlayerBeginFly(pp);
+        return;
+    }
+
+    // If moving forward and tag is a ladder start climbing
+    if (PlayerOnLadder(pp))
+    {
+        DoPlayerBeginClimb(pp);
+        return;
+    }
+
+    DoPlayerMove(pp);
+
+    DoPlayerJumpHeight(pp);
+}
+
+
+void
+DoPlayerForceJump(PLAYERp pp)
+{
+    short i;
+
+    // instead of multiplying by synctics, use a loop for greater accuracy
+    for (i = 0; i < synctics; i++)
+    {
+        // adjust jump speed by gravity - if jump speed greater than 0 player
+        // have started falling
+        if ((pp->jump_speed += PlayerGravity) > 0)
+        {
+            DoPlayerBeginFall(pp);
+            DoPlayerFall(pp);
+            return;
+        }
+
+        // adjust height by jump speed
+        pp->posz += pp->jump_speed;
+
+        // if player gets to close the ceiling while jumping
+        //if (pp->posz < pp->hiz + Z(4))
+        if (PlayerCeilingHit(pp, pp->hiz + Z(4)))
+        {
+            // put player at the ceiling
+            pp->posz = pp->hiz + Z(4);
+
+            // reverse your speed to falling
+            pp->jump_speed = -pp->jump_speed;
+
+            // start falling
+            DoPlayerBeginFall(pp);
+            DoPlayerFall(pp);
+            return;
+        }
+    }
+
+    DoPlayerMove(pp);
+}
+
+void
+DoPlayerBeginFall(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    SET(pp->Flags, PF_FALLING);
+    RESET(pp->Flags, PF_JUMPING);
+    RESET(pp->Flags, PF_CRAWLING);
+    RESET(pp->Flags, PF_LOCK_CRAWL);
+    SET(pp->Flags2, PF2_INPUT_CAN_TURN|PF2_INPUT_CAN_AIM);
+
+    pp->floor_dist = PLAYER_FALL_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_FALL_CEILING_DIST;
+    pp->DoPlayerAction = DoPlayerFall;
+    pp->friction = PLAYER_FALL_FRICTION;
+
+    // Only change to falling frame if you were in the jump frame
+    // Otherwise an animation may be messed up such as Running Jump Kick
+    if (u->Rot == u->ActorActionSet->Jump)
+        NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Fall);
+}
+
+void StackedWaterSplash(PLAYERp pp)
+{
+    if (FAF_ConnectArea(pp->cursectnum))
+    {
+        short sectnum = pp->cursectnum;
+
+        updatesectorz(pp->posx, pp->posy, SPRITEp_BOS(pp->SpriteP), &sectnum);
+
+        if (sectnum >= 0 && SectorIsUnderwaterArea(sectnum))
+        {
+            PlaySound(DIGI_SPLASH1, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan);
+        }
     }
 }
 
-#define PIPEBOMB_CONTROL(playerNum) (Gv_GetVarByLabel("PIPEBOMB_CONTROL", PIPEBOMB_REMOTE, -1, playerNum))
-
-static void P_ProcessWeapon(int playerNum)
+void
+DoPlayerFall(PLAYERp pp)
 {
-    auto const     pPlayer      = g_player[playerNum].ps;
-    uint8_t *const weaponFrame  = &pPlayer->kickback_pic;
-    int const      playerShrunk = (sprite[pPlayer->i].yrepeat < 32);
-    uint32_t       playerBits   = g_player[playerNum].input.bits;
+    short i;
+    int recoil_amt;
+    int depth;
+    static int handle=0;
 
-    switch (pPlayer->weapon_pos)
+    // reset flag key for double jumps
+    if (!TEST_SYNC_KEY(pp, SK_JUMP))
     {
-        case WEAPON_POS_LOWER:
-            if (pPlayer->last_weapon >= 0)
-            {
-                pPlayer->weapon_pos  = WEAPON_POS_RAISE;
-                pPlayer->last_weapon = -1;
-            }
-            else if (pPlayer->holster_weapon == 0)
-                pPlayer->weapon_pos = WEAPON_POS_RAISE;
-            break;
-        case 0: break;
-        default: pPlayer->weapon_pos--; break;
+        FLAG_KEY_RESET(pp, SK_JUMP);
     }
 
-    if (TEST_SYNC_KEY(playerBits, SK_FIRE))
+    if (pp->cursectnum >= 0 && SectorIsUnderwaterArea(pp->cursectnum))
     {
-        P_SetWeaponGamevars(playerNum, pPlayer);
-
-        if (VM_OnEvent(EVENT_PRESSEDFIRE, pPlayer->i, playerNum) != 0)
-            playerBits &= ~BIT(SK_FIRE);
+        StackedWaterSplash(pp);
+        DoPlayerBeginDiveNoWarp(pp);
+        return;
     }
 
-    if (TEST_SYNC_KEY(playerBits, SK_HOLSTER))   // 'Holster Weapon
+    for (i = 0; i < synctics; i++)
     {
-        P_SetWeaponGamevars(playerNum, pPlayer);
+        // adjust jump speed by gravity
+        pp->jump_speed += PlayerGravity;
+        if (pp->jump_speed > 4100)
+            pp->jump_speed = 4100;
 
-        if (VM_OnEvent(EVENT_HOLSTER, pPlayer->i, playerNum) == 0)
+        // adjust player height by jump speed
+        pp->posz += pp->jump_speed;
+
+        ////DSPRINTF(ds,"Fall velocity = %d",pp->jump_speed);
+        //MONO_PRINT(ds);
+
+        if (pp->jump_speed > 2000)
         {
-            if (PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) != KNEE_WEAPON)
+            PlayerSound(DIGI_FALLSCREAM, &pp->posx, &pp->posy, &pp->posz,
+                        v3df_dontpan|v3df_doppler|v3df_follow,pp);
+            handle = pp->TalkVocHandle; // Save id for later
+        }
+        else if (pp->jump_speed > 1300)
+        {
+            if (TEST(pp->Flags, PF_LOCK_HORIZ))
             {
-                if (pPlayer->holster_weapon == 0 && pPlayer->weapon_pos == 0)
-                {
-                    pPlayer->holster_weapon = 1;
-                    pPlayer->weapon_pos     = -1;
-                    P_DoQuote(QUOTE_WEAPON_LOWERED, pPlayer);
-                }
-                else if (pPlayer->holster_weapon == 1 && pPlayer->weapon_pos == WEAPON_POS_LOWER)
-                {
-                    pPlayer->holster_weapon = 0;
-                    pPlayer->weapon_pos = WEAPON_POS_RAISE;
-                    P_DoQuote(QUOTE_WEAPON_RAISED,pPlayer);
-                }
+                RESET(pp->Flags, PF_LOCK_HORIZ);
+                SET(pp->Flags, PF_LOOKING);
+            }
+        }
+
+
+
+        depth = GetZadjustment(pp->cursectnum, FLOOR_Z_ADJUST)>>8;
+        if (depth == 0)
+            depth = pp->WadeDepth;
+
+        if (depth > 20)
+            recoil_amt = 0;
+        else
+            recoil_amt = min(pp->jump_speed*6,Z(35));
+
+        // need a test for head hits a sloped ceiling while falling
+        // if player gets to close the Ceiling while Falling
+        if (PlayerCeilingHit(pp, pp->hiz + pp->ceiling_dist))
+        {
+            // put player at the ceiling
+            pp->posz = pp->hiz + pp->ceiling_dist;
+            // don't return or anything - allow to fall until
+            // hit floor
+        }
+
+        if (PlayerFloorHit(pp, pp->loz - PLAYER_HEIGHT + recoil_amt))
+        {
+            SECT_USERp sectu = SectUser[pp->cursectnum];
+            SECTORp sectp = &sector[pp->cursectnum];
+
+            PlayerSectorBound(pp, Z(1));
+
+            if (sectu && (TEST(sectp->extra, SECTFX_LIQUID_MASK) != SECTFX_LIQUID_NONE))
+            {
+                PlaySound(DIGI_SPLASH1, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan);
+            }
+            else
+            {
+                if (pp->jump_speed > 1020)
+                    // Feet hitting ground sound
+                    PlaySound(DIGI_HITGROUND, &pp->posx, &pp->posy, &pp->posz, v3df_follow|v3df_dontpan);
             }
 
-            if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_HOLSTER_CLEARS_CLIP)
+            if (FX_SoundValidAndActive(handle))
             {
-                int const weap = pPlayer->curr_weapon, clipcnt = PWEAPON(playerNum, weap, Clip);
+                // My sound code will detect the sound has stopped and clean up
+                // for you.
+                FX_StopSound(handle);
+                pp->PlayerTalking = FALSE;
+                handle = 0;
+            }
 
-                if (pPlayer->ammo_amount[weap] > clipcnt && (pPlayer->ammo_amount[weap] % clipcnt) != 0)
+            // i any kind of crawl key get rid of recoil
+            if (DoPlayerTestCrawl(pp) || TEST_SYNC_KEY(pp, SK_CRAWL))
+            {
+                pp->posz = pp->loz - PLAYER_CRAWL_HEIGHT;
+            }
+            else
+            {
+                // this was causing the z to snap immediately
+                // changed it so it stays gradual
+
+                //pp->posz = pp->loz - PLAYER_HEIGHT + recoil_amt;
+
+                pp->posz += recoil_amt;
+                DoPlayerHeight(pp);
+            }
+
+            // do some damage
+            if (pp->jump_speed > 1700 && depth == 0)
+            {
+
+                PlayerSound(DIGI_PLAYERPAIN2, &pp->posx, &pp->posy, &pp->posz, v3df_follow|v3df_dontpan,pp);
+                // PlayerUpdateHealth(pp, -RANDOM_RANGE(PLAYER_FALL_DAMAGE_AMOUNT) - 2);
+
+                if (pp->jump_speed > 1700 && pp->jump_speed < 4000)
                 {
-                    pPlayer->ammo_amount[weap] -= pPlayer->ammo_amount[weap] % clipcnt;
-                    *weaponFrame                = PWEAPON(playerNum, weap, TotalTime);
-                    playerBits                 &= ~BIT(SK_FIRE);  // not firing...
+                    if (pp->jump_speed > 0)
+                        PlayerUpdateHealth(pp, -((pp->jump_speed-1700)/40));
+                }
+                else if (pp->jump_speed >= 4000)
+                {
+                    USERp u = User[pp->PlayerSprite];
+                    PlayerUpdateHealth(pp, -u->Health);  // Make sure he dies!
+                    u->Health = 0;
                 }
 
+                PlayerCheckDeath(pp, -1);
+
+                if (TEST(pp->Flags, PF_DEAD))
+                    return;
+            }
+
+            if (TEST_SYNC_KEY(pp, SK_CRAWL))
+            {
+                StackedWaterSplash(pp);
+                DoPlayerBeginCrawl(pp);
+                return;
+            }
+
+            if (PlayerCanDiveNoWarp(pp))
+            {
+                DoPlayerBeginDiveNoWarp(pp);
+                return;
+            }
+
+            StackedWaterSplash(pp);
+            DoPlayerBeginRun(pp);
+            return;
+        }
+    }
+
+    if (PlayerFlyKey())
+    {
+        DoPlayerBeginFly(pp);
+        return;
+    }
+
+    // If moving forward and tag is a ladder start climbing
+    if (PlayerOnLadder(pp))
+    {
+        DoPlayerBeginClimb(pp);
+        return;
+    }
+
+    DoPlayerMove(pp);
+}
+
+void
+DoPlayerBeginClimb(PLAYERp pp)
+{
+//    USERp u = User[pp->PlayerSprite];
+    SPRITEp sp = pp->SpriteP;
+
+    RESET(pp->Flags, PF_JUMPING|PF_FALLING);
+    RESET(pp->Flags, PF_CRAWLING);
+    RESET(pp->Flags, PF_LOCK_CRAWL);
+    SET(pp->Flags2, PF2_INPUT_CAN_AIM);
+
+    pp->DoPlayerAction = DoPlayerClimb;
+
+    SET(pp->Flags, PF_CLIMBING|PF_WEAPON_DOWN);
+    SET(sp->cstat, CSTAT_SPRITE_YCENTER);
+
+    //DamageData[u->WeaponNum].Init(pp);
+
+    //NewStateGroup(pp->PlayerSprite, User[pp->PlayerSprite]->ActorActionSet->Climb);
+    NewStateGroup(pp->PlayerSprite, sg_PlayerNinjaClimb);
+}
+
+
+void
+DoPlayerClimb(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+    int climb_amt;
+    char i;
+    SPRITEp sp = pp->SpriteP;
+    int climbvel;
+    int dot;
+    short sec,wal,spr;
+    int dist;
+    SWBOOL LadderUpdate = FALSE;
+
+    if (Prediction)
+        return;
+
+    pp->xvect += ((pp->input.vel*synctics*2)<<6);
+    pp->yvect += ((pp->input.svel*synctics*2)<<6);
+    pp->xvect  = mulscale16(pp->xvect, PLAYER_CLIMB_FRICTION);
+    pp->yvect  = mulscale16(pp->yvect, PLAYER_CLIMB_FRICTION);
+    if (labs(pp->xvect) < 12800 && labs(pp->yvect) < 12800)
+        pp->xvect = pp->yvect = 0;
+
+    climbvel = FindDistance2D(pp->xvect, pp->yvect)>>9;
+    dot = DOT_PRODUCT_2D(pp->xvect, pp->yvect, sintable[NORM_ANGLE(fix16_to_int(pp->q16ang)+512)], sintable[fix16_to_int(pp->q16ang)]);
+    if (dot < 0)
+        climbvel = -climbvel;
+
+    // Run lock - routine doesn't call DoPlayerMove
+    PLAYER_RUN_LOCK(pp);
+
+    // need to rewrite this for FAF stuff
+
+    // Jump off of the ladder
+    if (TEST_SYNC_KEY(pp, SK_JUMP))
+    {
+        RESET(pp->Flags, PF_CLIMBING|PF_WEAPON_DOWN);
+        RESET(sp->cstat, CSTAT_SPRITE_YCENTER);
+        DoPlayerBeginJump(pp);
+        return;
+    }
+
+    if (climbvel != 0)
+    {
+        // move player to center of ladder
+        for (i = synctics; i; i--)
+        {
+#define ADJ_AMT 8
+
+            // player
+            if (pp->posx != pp->lx)
+            {
+                if (pp->posx < pp->lx)
+                    pp->posx += ADJ_AMT;
+                else if (pp->posx > pp->lx)
+                    pp->posx -= ADJ_AMT;
+
+                if (labs(pp->posx - pp->lx) <= ADJ_AMT)
+                    pp->posx = pp->lx;
+            }
+
+            if (pp->posy != pp->ly)
+            {
+                if (pp->posy < pp->ly)
+                    pp->posy += ADJ_AMT;
+                else if (pp->posy > pp->ly)
+                    pp->posy -= ADJ_AMT;
+
+                if (labs(pp->posy - pp->ly) <= ADJ_AMT)
+                    pp->posy = pp->ly;
+            }
+
+            // sprite
+            if (sp->x != u->sx)
+            {
+                if (sp->x < u->sx)
+                    sp->x += ADJ_AMT;
+                else if (sp->x > u->sx)
+                    sp->x -= ADJ_AMT;
+
+                if (labs(sp->x - u->sx) <= ADJ_AMT)
+                    sp->x = u->sx;
+            }
+
+            if (sp->y != u->sy)
+            {
+                if (sp->y < u->sy)
+                    sp->y += ADJ_AMT;
+                else if (sp->y > u->sy)
+                    sp->y -= ADJ_AMT;
+
+                if (labs(sp->y - u->sy) <= ADJ_AMT)
+                    sp->y = u->sy;
+            }
+        }
+    }
+
+    DoPlayerZrange(pp);
+
+    ASSERT(pp->LadderSector >= 0 && pp->LadderSector <= MAXSECTORS);
+
+    // moving UP
+    if (climbvel > 0)
+    {
+        // pp->climb_ndx += climb_rate * synctics;
+        climb_amt = (climbvel>>4) * 8;
+
+        pp->climb_ndx &= 1023;
+
+        pp->posz -= climb_amt;
+
+        // if player gets to close the ceiling while climbing
+        if (PlayerCeilingHit(pp, pp->hiz))
+        {
+            // put player at the hiz
+            pp->posz = pp->hiz;
+            NewStateGroup(pp->PlayerSprite, sg_PlayerNinjaClimb);
+        }
+
+        // if player gets to close the ceiling while climbing
+        if (PlayerCeilingHit(pp, pp->hiz + Z(4)))
+        {
+            // put player at the ceiling
+            pp->posz = sector[pp->LadderSector].ceilingz + Z(4);
+            NewStateGroup(pp->PlayerSprite, sg_PlayerNinjaClimb);
+        }
+
+        // if floor is ABOVE you && your head goes above it, do a jump up to
+        // terrace
+
+        if (pp->posz < sector[pp->LadderSector].floorz - Z(6))
+        {
+            pp->jump_speed = PLAYER_CLIMB_JUMP_AMT;
+            RESET(pp->Flags, PF_CLIMBING|PF_WEAPON_DOWN);
+            RESET(sp->cstat, CSTAT_SPRITE_YCENTER);
+            DoPlayerBeginForceJump(pp);
+        }
+    }
+    else
+    // move DOWN
+    if (climbvel < 0)
+    {
+        // pp->climb_ndx += climb_rate * synctics;
+        climb_amt = -(climbvel>>4) * 8;
+
+        pp->climb_ndx &= 1023;
+
+        // pp->posz += (climb_amt * sintable[pp->climb_ndx]) >> 14;
+        pp->posz += climb_amt;
+
+        // if you are touching the floor
+        //if (pp->posz >= pp->loz - Z(4) - PLAYER_HEIGHT)
+        if (PlayerFloorHit(pp, pp->loz - Z(4) - PLAYER_HEIGHT))
+        {
+            // stand on floor
+            pp->posz = pp->loz - Z(4) - PLAYER_HEIGHT;
+
+            // if moving backwards start running
+            if (climbvel < 0)
+            {
+                RESET(pp->Flags, PF_CLIMBING|PF_WEAPON_DOWN);
+                RESET(sp->cstat, CSTAT_SPRITE_YCENTER);
+                DoPlayerBeginRun(pp);
                 return;
             }
         }
     }
-
-    int const maybeGlowingWeapon = pPlayer->last_weapon != -1 ? pPlayer->last_weapon : pPlayer->curr_weapon;
-
-    if (PWEAPON(playerNum, maybeGlowingWeapon, Flags) & WEAPON_GLOWS)
+    else
     {
-        pPlayer->random_club_frame += 64; // Glowing
-
-#ifdef POLYMER
-        if (pPlayer->kickback_pic == 0)
-        {
-            auto   const pSprite = &sprite[pPlayer->i];
-            vec3_t const offset = { -((sintable[(pSprite->ang+512)&2047])>>7), -((sintable[(pSprite->ang)&2047])>>7), pPlayer->spritezoffset };
-
-            int const glowRange = (16-klabs(pPlayer->weapon_pos)+(sintable[pPlayer->random_club_frame & 2047]>>10))<<6;
-
-            G_AddGameLight(pPlayer->i, pPlayer->cursectnum, offset, max(glowRange, 0), 0, 100,
-                           PWEAPON(playerNum, maybeGlowingWeapon, FlashColor), PR_LIGHT_PRIO_HIGH_GAME);
-
-            practor[pPlayer->i].lightcount = 2;
-        }
-#endif
+        NewStateGroup(pp->PlayerSprite, sg_PlayerNinjaClimb);
     }
 
-    // this is a hack for WEAPON_FIREEVERYOTHER
-    if (actor[pPlayer->i].t_data[7])
-    {
-        actor[pPlayer->i].t_data[7]--;
-        if (pPlayer->last_weapon == -1 && actor[pPlayer->i].t_data[7] != 0 && ((actor[pPlayer->i].t_data[7] & 1) == 0))
-        {
-            if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_AMMOPERSHOT)
-            {
-                if (pPlayer->ammo_amount[pPlayer->curr_weapon] > 0)
-                    pPlayer->ammo_amount[pPlayer->curr_weapon]--;
-                else
-                {
-                    actor[pPlayer->i].t_data[7] = 0;
-                    P_CheckWeapon(pPlayer);
-                }
-            }
+    // setsprite to players location
+    sp->z = pp->posz + PLAYER_HEIGHT;
+    changespritesect(pp->PlayerSprite, pp->cursectnum);
 
-            if (actor[pPlayer->i].t_data[7] != 0)
-                A_Shoot(pPlayer->i,PWEAPON(playerNum, pPlayer->curr_weapon, Shoots));
-        }
+    DoPlayerHorizon(pp, &pp->q16horiz, pp->input.q16aimvel);
+
+    if (FAF_ConnectArea(pp->cursectnum))
+    {
+        updatesectorz(pp->posx, pp->posy, pp->posz, &pp->cursectnum);
+        LadderUpdate = TRUE;
     }
 
-    if (pPlayer->rapid_fire_hold == 1)
+    if (WarpPlane(&pp->posx, &pp->posy, &pp->posz, &pp->cursectnum))
     {
-        if (TEST_SYNC_KEY(playerBits, SK_FIRE))
-            return;
-        pPlayer->rapid_fire_hold = 0;
+        PlayerWarpUpdatePos(pp);
+        LadderUpdate = TRUE;
     }
 
-    bool const doFire    = (playerBits & BIT(SK_FIRE) && (*weaponFrame) == 0);
-    bool const doAltFire = g_player[playerNum].input.extbits & BIT(EK_ALT_FIRE);
-
-    if (doAltFire)
+    if (LadderUpdate)
     {
-        P_SetWeaponGamevars(playerNum, pPlayer);
-        VM_OnEvent(EVENT_ALTFIRE, pPlayer->i, playerNum);
-    }
+        SPRITEp lsp;
+        int nx,ny;
 
-    if (playerShrunk || pPlayer->tipincs || pPlayer->access_incs)
-        playerBits &= ~BIT(SK_FIRE);
-    else if (doFire && pPlayer->fist_incs == 0 &&
-             pPlayer->last_weapon == -1 && (pPlayer->weapon_pos == 0 || pPlayer->holster_weapon == 1))
-    {
-        pPlayer->crack_time = PCRACKTIME;
+        // constantly look for new ladder sector because of warping at any time
+        neartag(pp->posx, pp->posy, pp->posz,
+                pp->cursectnum, fix16_to_int(pp->q16ang),
+                &sec, &wal, &spr,
+                &dist, 800L, NTAG_SEARCH_LO_HI, NULL);
 
-        if (pPlayer->holster_weapon == 1)
+        if (wal >= 0)
         {
-            if (pPlayer->last_pissed_time <= (GAMETICSPERSEC * 218) && pPlayer->weapon_pos == WEAPON_POS_LOWER)
-            {
-                pPlayer->holster_weapon = 0;
-                pPlayer->weapon_pos     = WEAPON_POS_RAISE;
-                P_DoQuote(QUOTE_WEAPON_RAISED, pPlayer);
-            }
-        }
-        else
-        {
-            P_SetWeaponGamevars(playerNum, pPlayer);
+            pp->LadderSector = wall[wal].nextsector;
 
-            if (doFire && VM_OnEvent(EVENT_FIRE, pPlayer->i, playerNum) == 0)
-            {
-                // this event is deprecated
-                VM_OnEvent(EVENT_FIREWEAPON, pPlayer->i, playerNum);
+            lsp = FindNearSprite(pp->SpriteP, STAT_CLIMB_MARKER);
 
-                switch (PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike))
-                {
-                    case HANDBOMB_WEAPON:
-                        pPlayer->hbomb_hold_delay = 0;
-                        if (pPlayer->ammo_amount[pPlayer->curr_weapon] > 0)
-                        {
-                            (*weaponFrame) = 1;
-                            if (PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound) > 0)
-                                A_PlaySound(PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound), pPlayer->i);
-                        }
-                        break;
+            // determine where the player is supposed to be in relation to the ladder
+            // move out in front of the ladder
+            nx = MOVEx(100, lsp->ang);
+            ny = MOVEy(100, lsp->ang);
 
-                    case HANDREMOTE_WEAPON:
-                        pPlayer->hbomb_hold_delay = 0;
-                        (*weaponFrame)            = 1;
-                        if (PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound) > 0)
-                            A_PlaySound(PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound), pPlayer->i);
-                        break;
+            // set angle player is supposed to face.
+            pp->LadderAngle = NORM_ANGLE(lsp->ang + 1024);
+            pp->LadderSector = wall[wal].nextsector;
 
+            // set players "view" distance from the ladder - needs to be farther than
+            // the sprite
 
-                    case TRIPBOMB_WEAPON:
-                        if (pPlayer->ammo_amount[pPlayer->curr_weapon] > 0)
-                        {
-                            hitdata_t hitData;
-                            int const pq16ang = fix16_to_int(pPlayer->q16ang);
-                            hitscan((const vec3_t *)pPlayer, pPlayer->cursectnum, sintable[(pq16ang + 512) & 2047],
-                                    sintable[pq16ang & 2047], fix16_to_int(F16(100) - pPlayer->q16horiz - pPlayer->q16horizoff) * 32, &hitData,
-                                    CLIPMASK1);
+            pp->lx = lsp->x + nx * 5;
+            pp->ly = lsp->y + ny * 5;
 
-                            if ((hitData.sect < 0 || hitData.sprite >= 0) ||
-                                (hitData.wall >= 0 && sector[hitData.sect].lotag > 2))
-                                break;
-
-                            if (hitData.wall >= 0 && wall[hitData.wall].overpicnum >= 0)
-                                if (wall[hitData.wall].overpicnum == BIGFORCE)
-                                    break;
-
-                            uint32_t xdiff_sq, ydiff_sq;
-                            int spriteNum = headspritesect[hitData.sect];
-                            while (spriteNum >= 0)
-                            {
-                                xdiff_sq = (sprite[spriteNum].x - hitData.x) * (sprite[spriteNum].x - hitData.x);
-                                ydiff_sq = (sprite[spriteNum].y - hitData.y) * (sprite[spriteNum].y - hitData.y);
-
-                                if (sprite[spriteNum].picnum == TRIPBOMB && klabs(sprite[spriteNum].z - hitData.z) < ZOFFSET4
-                                        && xdiff_sq + ydiff_sq < (290 * 290))
-                                    break;
-                                spriteNum = nextspritesect[spriteNum];
-                            }
-
-                            // ST_2_UNDERWATER
-                            if (spriteNum == -1 && hitData.wall >= 0 && (wall[hitData.wall].cstat & 16) == 0)
-                                if ((wall[hitData.wall].nextsector >= 0 && sector[wall[hitData.wall].nextsector].lotag <= 2) ||
-                                    (wall[hitData.wall].nextsector == -1 && sector[hitData.sect].lotag <= 2))
-                                {
-                                    xdiff_sq = (hitData.x - pPlayer->pos.x) * (hitData.x - pPlayer->pos.x);
-                                    ydiff_sq = (hitData.y - pPlayer->pos.y) * (hitData.y - pPlayer->pos.y);
-
-                                    if (xdiff_sq + ydiff_sq < (290 * 290))
-                                    {
-                                        pPlayer->pos.z = pPlayer->opos.z;
-                                        pPlayer->vel.z = 0;
-                                        (*weaponFrame) = 1;
-                                        if (PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound) > 0)
-                                        {
-                                            A_PlaySound(PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound), pPlayer->i);
-                                        }
-                                    }
-                                }
-                        }
-                        break;
-
-                    case PISTOL_WEAPON:
-                    case SHOTGUN_WEAPON:
-                    case CHAINGUN_WEAPON:
-                    case SHRINKER_WEAPON:
-                    case GROW_WEAPON:
-                    case FREEZE_WEAPON:
-                    case RPG_WEAPON:
-                        if (pPlayer->ammo_amount[pPlayer->curr_weapon] > 0)
-                        {
-                            (*weaponFrame) = 1;
-                            if (PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound) > 0)
-                                A_PlaySound(PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound), pPlayer->i);
-                        }
-                        break;
-
-                    case FLAMETHROWER_WEAPON:
-                        if (pPlayer->ammo_amount[pPlayer->curr_weapon] > 0)
-                        {
-                            (*weaponFrame) = 1;
-                            if (PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound) > 0 && sector[pPlayer->cursectnum].lotag != ST_2_UNDERWATER)
-                                A_PlaySound(PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound), pPlayer->i);
-                        }
-                        break;
-
-                    case DEVISTATOR_WEAPON:
-                        if (pPlayer->ammo_amount[pPlayer->curr_weapon] > 0)
-                        {
-                            (*weaponFrame)            = 1;
-                            pPlayer->hbomb_hold_delay = !pPlayer->hbomb_hold_delay;
-                            if (PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound) > 0)
-                                A_PlaySound(PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound), pPlayer->i);
-                        }
-                        break;
-
-                    case KNEE_WEAPON:
-                        if (pPlayer->quick_kick == 0)
-                        {
-                            (*weaponFrame) = 1;
-                            if (PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound) > 0)
-                                A_PlaySound(PWEAPON(playerNum, pPlayer->curr_weapon, InitialSound), pPlayer->i);
-                        }
-                        break;
-                }
-            }
-        }
-    }
-    else if (*weaponFrame)
-    {
-        if (PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == HANDBOMB_WEAPON)
-        {
-            if (PWEAPON(playerNum, pPlayer->curr_weapon, HoldDelay) && ((*weaponFrame) == PWEAPON(playerNum, pPlayer->curr_weapon, FireDelay)) && TEST_SYNC_KEY(playerBits, SK_FIRE))
-            {
-                pPlayer->rapid_fire_hold = 1;
-                return;
-            }
-
-            if (++(*weaponFrame) == PWEAPON(playerNum, pPlayer->curr_weapon, HoldDelay))
-            {
-                pPlayer->ammo_amount[pPlayer->curr_weapon]--;
-
-                if (numplayers < 2 || g_netServer)
-                {
-                    int pipeBombType;
-                    int pipeBombZvel;
-                    int pipeBombFwdVel;
-
-                    if (pPlayer->on_ground && TEST_SYNC_KEY(playerBits, SK_CROUCH))
-                    {
-                        pipeBombFwdVel = 15;
-                        pipeBombZvel   = (fix16_to_int(pPlayer->q16horiz + pPlayer->q16horizoff - F16(100)) * 20);
-                    }
-                    else
-                    {
-                        pipeBombFwdVel = 140;
-                        pipeBombZvel   = -512 - (fix16_to_int(pPlayer->q16horiz + pPlayer->q16horizoff - F16(100)) * 20);
-                    }
-                    int const pq16ang = fix16_to_int(pPlayer->q16ang);
-                    int pipeSpriteNum = A_InsertSprite(pPlayer->cursectnum,
-                                       pPlayer->pos.x+(sintable[(pq16ang +512)&2047]>>6),
-                                       pPlayer->pos.y+(sintable[pq16ang &2047]>>6),
-                                       pPlayer->pos.z,PWEAPON(playerNum, pPlayer->curr_weapon, Shoots),-16,9,9,
-                                       pq16ang,(pipeBombFwdVel+(pPlayer->hbomb_hold_delay<<5)),pipeBombZvel,pPlayer->i,1);
-
-                    pipeBombType = PIPEBOMB_CONTROL(playerNum);
-
-                    if (pipeBombType & PIPEBOMB_TIMER)
-                    {
-                        int pipeLifeTime     = Gv_GetVarByLabel("GRENADE_LIFETIME", NAM_GRENADE_LIFETIME, -1, playerNum);
-                        int pipeLifeVariance = Gv_GetVarByLabel("GRENADE_LIFETIME_VAR", NAM_GRENADE_LIFETIME_VAR, -1, playerNum);
-                        actor[pipeSpriteNum].t_data[7]= pipeLifeTime
-                                            + mulscale14(krand(), pipeLifeVariance)
-                                            - pipeLifeVariance;
-                        // TIMER_CONTROL
-                        actor[pipeSpriteNum].t_data[6]=1;
-                    }
-                    else actor[pipeSpriteNum].t_data[6]=2;
-
-                    if (pipeBombFwdVel == 15)
-                    {
-                        sprite[pipeSpriteNum].yvel = 3;
-                        sprite[pipeSpriteNum].z += ZOFFSET3;
-                    }
-
-                    if (A_GetHitscanRange(pPlayer->i) < 512)
-                    {
-                        sprite[pipeSpriteNum].ang += 1024;
-                        sprite[pipeSpriteNum].zvel /= 3;
-                        sprite[pipeSpriteNum].xvel /= 3;
-                    }
-                }
-
-                pPlayer->hbomb_on = 1;
-            }
-            else if ((*weaponFrame) < PWEAPON(playerNum, pPlayer->curr_weapon, HoldDelay) && TEST_SYNC_KEY(playerBits, SK_FIRE))
-                pPlayer->hbomb_hold_delay++;
-            else if ((*weaponFrame) > PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime))
-            {
-                (*weaponFrame) = 0;
-                if (PIPEBOMB_CONTROL(playerNum) == PIPEBOMB_REMOTE)
-                {
-                    pPlayer->weapon_pos = WEAPON_POS_RAISE;
-                    pPlayer->curr_weapon = HANDREMOTE_WEAPON;
-                    pPlayer->last_weapon = -1;
-                }
-                else
-                {
-                    if (!NAM_WW2GI)
-                        pPlayer->weapon_pos = WEAPON_POS_RAISE;
-                    P_CheckWeapon(pPlayer);
-                }
-            }
-        }
-        else if (PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == HANDREMOTE_WEAPON)
-        {
-            if (++(*weaponFrame) == PWEAPON(playerNum, pPlayer->curr_weapon, FireDelay))
-            {
-                if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_BOMB_TRIGGER)
-                    pPlayer->hbomb_on = 0;
-
-                if (PWEAPON(playerNum, pPlayer->curr_weapon, Shoots) != 0)
-                {
-                    if (!(PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_NOVISIBLE))
-                    {
-                        lastvisinc = (int32_t) totalclock+32;
-                        pPlayer->visibility = 0;
-                    }
-
-                    P_SetWeaponGamevars(playerNum, pPlayer);
-                    A_Shoot(pPlayer->i, PWEAPON(playerNum, pPlayer->curr_weapon, Shoots));
-                }
-            }
-
-            if ((*weaponFrame) >= PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime))
-            {
-                (*weaponFrame) = 0;
-                if ((pPlayer->ammo_amount[HANDBOMB_WEAPON] > 0) && PIPEBOMB_CONTROL(playerNum) == PIPEBOMB_REMOTE)
-                    P_AddWeapon(pPlayer, HANDBOMB_WEAPON, 1);
-                else P_CheckWeapon(pPlayer);
-            }
-        }
-        else
-        {
-            // the basic weapon...
-            (*weaponFrame)++;
-
-            if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_CHECKATRELOAD)
-            {
-                if (PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == TRIPBOMB_WEAPON)
-                {
-                    if ((*weaponFrame) >= PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime))
-                    {
-                        (*weaponFrame) = 0;
-                        P_CheckWeapon(pPlayer);
-                        pPlayer->weapon_pos = WEAPON_POS_LOWER;
-                    }
-                }
-                else if (*weaponFrame >= PWEAPON(playerNum, pPlayer->curr_weapon, Reload))
-                    P_CheckWeapon(pPlayer);
-            }
-            else if (PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike)!=KNEE_WEAPON && *weaponFrame >= PWEAPON(playerNum, pPlayer->curr_weapon, FireDelay))
-                P_CheckWeapon(pPlayer);
-
-            if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_STANDSTILL
-                    && *weaponFrame < (PWEAPON(playerNum, pPlayer->curr_weapon, FireDelay)+1))
-            {
-                pPlayer->pos.z = pPlayer->opos.z;
-                pPlayer->vel.z = 0;
-            }
-
-            if (*weaponFrame == PWEAPON(playerNum, pPlayer->curr_weapon, Sound2Time))
-                if (PWEAPON(playerNum, pPlayer->curr_weapon, Sound2Sound) > 0)
-                    A_PlaySound(PWEAPON(playerNum, pPlayer->curr_weapon, Sound2Sound),pPlayer->i);
-
-            if (*weaponFrame == PWEAPON(playerNum, pPlayer->curr_weapon, SpawnTime))
-                P_DoWeaponSpawn(playerNum);
-
-            if ((*weaponFrame) >= PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime))
-            {
-                if (/*!(PWEAPON(snum, p->curr_weapon, Flags) & WEAPON_CHECKATRELOAD) && */ pPlayer->reloading == 1 ||
-                        (PWEAPON(playerNum, pPlayer->curr_weapon, Reload) > PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime) && pPlayer->ammo_amount[pPlayer->curr_weapon] > 0
-                         && (PWEAPON(playerNum, pPlayer->curr_weapon, Clip)) && (((pPlayer->ammo_amount[pPlayer->curr_weapon]%(PWEAPON(playerNum, pPlayer->curr_weapon, Clip)))==0))))
-                {
-                    int const weaponReloadTime = PWEAPON(playerNum, pPlayer->curr_weapon, Reload)
-                                               - PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime);
-
-                    pPlayer->reloading = 1;
-
-                    if ((*weaponFrame) != (PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime)))
-                    {
-                        if ((*weaponFrame) == (PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime)+1))
-                        {
-                            if (PWEAPON(playerNum, pPlayer->curr_weapon, ReloadSound1) > 0)
-                                A_PlaySound(PWEAPON(playerNum, pPlayer->curr_weapon, ReloadSound1), pPlayer->i);
-                        }
-                        else if (((*weaponFrame) ==
-                                  (PWEAPON(playerNum, pPlayer->curr_weapon, Reload) - (weaponReloadTime / 3)) &&
-                                  !(PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_RELOAD_TIMING)) ||
-                                 ((*weaponFrame) ==
-                                  (PWEAPON(playerNum, pPlayer->curr_weapon, Reload) - weaponReloadTime + 4) &&
-                                  (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_RELOAD_TIMING)))
-                        {
-                            if (PWEAPON(playerNum, pPlayer->curr_weapon, ReloadSound2) > 0)
-                                A_PlaySound(PWEAPON(playerNum, pPlayer->curr_weapon, ReloadSound2), pPlayer->i);
-                        }
-                        else if ((*weaponFrame) >= (PWEAPON(playerNum, pPlayer->curr_weapon, Reload)))
-                        {
-                            *weaponFrame       = 0;
-                            pPlayer->reloading = 0;
-                        }
-                    }
-                }
-                else
-                {
-                    if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_AUTOMATIC &&
-                            (PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike)==KNEE_WEAPON || pPlayer->ammo_amount[pPlayer->curr_weapon] > 0))
-                    {
-                        if (TEST_SYNC_KEY(playerBits, SK_FIRE))
-                        {
-                            *weaponFrame =
-                            (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_RANDOMRESTART) ? 1 + (krand() & 3) : 1;
-                        }
-                        else *weaponFrame = 0;
-                    }
-                    else *weaponFrame = 0;
-
-                    if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_RESET &&
-                        ((PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == KNEE_WEAPON)
-                         || pPlayer->ammo_amount[pPlayer->curr_weapon] > 0))
-                    {
-                        *weaponFrame = !!(TEST_SYNC_KEY(playerBits, SK_FIRE));
-                    }
-                }
-            }
-            else if (*weaponFrame >= PWEAPON(playerNum, pPlayer->curr_weapon, FireDelay)
-                     && ((PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == KNEE_WEAPON) || pPlayer->ammo_amount[pPlayer->curr_weapon] > 0))
-            {
-                if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_AUTOMATIC)
-                {
-                    if (!(PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_SEMIAUTO))
-                    {
-                        if (TEST_SYNC_KEY(playerBits, SK_FIRE) == 0 && (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_RESET || WW2GI))
-                            *weaponFrame = PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime);
-                        if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_FIREEVERYTHIRD)
-                        {
-                            if (((*(weaponFrame))%3) == 0)
-                            {
-                                P_FireWeapon(playerNum);
-                                P_DoWeaponSpawn(playerNum);
-                            }
-                        }
-                        else if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_FIREEVERYOTHER)
-                        {
-                            P_FireWeapon(playerNum);
-                            P_DoWeaponSpawn(playerNum);
-                        }
-                        else
-                        {
-                            if (*weaponFrame == PWEAPON(playerNum, pPlayer->curr_weapon, FireDelay))
-                            {
-                                P_FireWeapon(playerNum);
-//                                P_DoWeaponSpawn(snum);
-                            }
-                        }
-                        if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_RESET
-                            && (*weaponFrame) > PWEAPON(playerNum, pPlayer->curr_weapon, TotalTime)
-                                                - PWEAPON(playerNum, pPlayer->curr_weapon, HoldDelay)
-                            && ((PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == KNEE_WEAPON)
-                                || pPlayer->ammo_amount[pPlayer->curr_weapon] > 0))
-                        {
-                            *weaponFrame = !!(TEST_SYNC_KEY(playerBits, SK_FIRE));
-                        }
-                    }
-                    else
-                    {
-                        if (PWEAPON(playerNum, pPlayer->curr_weapon, Flags) & WEAPON_FIREEVERYOTHER)
-                        {
-                            P_FireWeapon(playerNum);
-                            P_DoWeaponSpawn(playerNum);
-                        }
-                        else
-                        {
-                            if (*weaponFrame == PWEAPON(playerNum, pPlayer->curr_weapon, FireDelay))
-                                P_FireWeapon(playerNum);
-                        }
-                    }
-                }
-                else if (*weaponFrame == PWEAPON(playerNum, pPlayer->curr_weapon, FireDelay))
-                    P_FireWeapon(playerNum);
-            }
+            pp->camq16ang = pp->q16ang = fix16_from_int(pp->LadderAngle);
         }
     }
 }
 
-void P_EndLevel(void)
-{
-    for (bssize_t TRAVERSE_CONNECT(playerNum))
-        g_player[playerNum].ps->gm = MODE_EOL;
 
-    if (ud.from_bonus)
+int
+DoPlayerWadeSuperJump(PLAYERp pp)
+{
+    hitdata_t hitinfo;
+    unsigned i;
+    //short angs[3];
+    static short angs[3] = {0, 0, 0};
+    int zh = sector[pp->cursectnum].floorz - Z(pp->WadeDepth) - Z(2);
+
+    if (Prediction) return FALSE;   // !JIM! 8/5/97 Teleporter FAFhitscan SuperJump bug.
+
+    for (i = 0; i < SIZ(angs); i++)
     {
-        ud.level_number   = ud.from_bonus;
-        ud.m_level_number = ud.level_number;
-        ud.from_bonus     = 0;
+        FAFhitscan(pp->posx, pp->posy, zh, pp->cursectnum,    // Start position
+                   sintable[NORM_ANGLE(fix16_to_int(pp->q16ang) + angs[i] + 512)],       // X vector of 3D ang
+                   sintable[NORM_ANGLE(fix16_to_int(pp->q16ang) + angs[i])],         // Y vector of 3D ang
+                   0,                          // Z vector of 3D ang
+                   &hitinfo, CLIPMASK_MISSILE);
+
+        if (hitinfo.wall >= 0 && hitinfo.sect >= 0)
+        {
+            hitinfo.sect = wall[hitinfo.wall].nextsector;
+
+            if (hitinfo.sect >= 0 && labs(sector[hitinfo.sect].floorz - pp->posz) < Z(50))
+            {
+                if (Distance(pp->posx, pp->posy, hitinfo.x, hitinfo.y) < ((((int)pp->SpriteP->clipdist)<<2) + 256))
+                    return TRUE;
+            }
+        }
+    }
+
+    return FALSE;
+}
+
+SWBOOL PlayerFlyKey(void)
+{
+    SWBOOL key;
+
+    if (!GodMode)
+        return FALSE;
+
+    if (InputMode)
+        return FALSE;
+
+    key = KEY_PRESSED(KEYSC_J);
+
+    if (key)
+        KEY_PRESSED(KEYSC_J) = 0;
+
+    return key;
+}
+
+#if 0
+void
+DoPlayerBeginSwim(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+    SPRITEp sp = &sprite[pp->PlayerSprite];
+
+    RESET(pp->Flags, PF_FALLING | PF_JUMPING);
+    SET(pp->Flags, PF_SWIMMING);
+
+    // reset because of bobbing when wading
+    pp->SpriteP->z = pp->posz + PLAYER_SWIM_HEIGHT;
+
+    pp->friction = PLAYER_SWIM_FRICTION;
+    pp->floor_dist = PLAYER_SWIM_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_SWIM_CEILING_DIST;
+    pp->DoPlayerAction = DoPlayerSwim;
+
+    //DamageData[u->WeaponNum].Init(pp);
+
+    NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Swim);
+
+    SET(sp->cstat, CSTAT_SPRITE_YCENTER);
+}
+
+
+void
+DoPlayerSwim(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+    SPRITEp sp = &sprite[pp->PlayerSprite];
+
+    // Jump to get up
+    if (TEST_SYNC_KEY(pp, SK_JUMP))
+    {
+        if (FLAG_KEY_PRESSED(pp, SK_JUMP))
+        {
+            FLAG_KEY_RELEASE(pp, SK_JUMP);
+            RESET(sp->cstat, CSTAT_SPRITE_YCENTER);
+            RESET(pp->Flags, PF_SWIMMING);
+            DoPlayerBeginJump(pp);
+            // return;
+        }
     }
     else
     {
-        ud.level_number   = (++ud.level_number < MAXLEVELS) ? ud.level_number : 0;
-        ud.m_level_number = ud.level_number;
-    }
-}
-
-static int P_DoFist(DukePlayer_t *pPlayer)
-{
-    // the fist punching NUKEBUTTON
-
-#ifndef EDUKE32_STANDALONE
-    if (FURY)
-        return 0;
-
-    if (++(pPlayer->fist_incs) == 28)
-    {
-        if (ud.recstat == 1)
-            G_CloseDemoWrite();
-
-        S_PlaySound(PIPEBOMB_EXPLODE);
-        P_PalFrom(pPlayer, 48, 64, 64, 64);
+        FLAG_KEY_RESET(pp, SK_JUMP);
     }
 
-    if (pPlayer->fist_incs > 42)
+    // If too shallow to swim or stopped the "RUN" key
+    if (pp->WadeDepth < MIN_SWIM_DEPTH || !(TEST_SYNC_KEY(pp, SK_RUN) || TEST(pp->Flags, PF_LOCK_RUN)))
     {
-        if (pPlayer->buttonpalette && ud.from_bonus == 0)
-        {
-            for (bssize_t TRAVERSE_CONNECT(playerNum))
-                g_player[playerNum].ps->gm = MODE_EOL;
-
-            ud.from_bonus = ud.level_number + 1;
-
-            if ((unsigned)ud.secretlevel <= MAXLEVELS)
-                ud.level_number = ud.secretlevel - 1;
-
-            ud.m_level_number = ud.level_number;
-        }
-        else
-            P_EndLevel();
-
-        pPlayer->fist_incs = 0;
-
-        return 1;
-    }
-#else
-    UNREFERENCED_PARAMETER(pPlayer);
-#endif
-
-    return 0;
-}
-
-void P_UpdatePosWhenViewingCam(DukePlayer_t *pPlayer)
-{
-    int const newOwner      = pPlayer->newowner;
-    pPlayer->pos            = sprite[newOwner].xyz;
-    pPlayer->q16ang         = fix16_from_int(SA(newOwner));
-    pPlayer->vel.x          = 0;
-    pPlayer->vel.y          = 0;
-    sprite[pPlayer->i].xvel = 0;
-    pPlayer->look_ang       = 0;
-    pPlayer->rotscrnang     = 0;
-}
-
-static void P_DoWater(int const playerNum, int const playerBits, int const floorZ, int const ceilZ)
-{
-    auto const pPlayer = g_player[playerNum].ps;
-
-    // under water
-    pPlayer->pycount        += 32;
-    pPlayer->pycount        &= 2047;
-    pPlayer->jumping_counter = 0;
-    pPlayer->pyoff           = sintable[pPlayer->pycount] >> 7;
-
-#ifndef EDUKE32_STANDALONE
-    if (!FURY && !A_CheckSoundPlaying(pPlayer->i, DUKE_UNDERWATER))
-        A_PlaySound(DUKE_UNDERWATER, pPlayer->i);
-#endif
-    if (TEST_SYNC_KEY(playerBits, SK_JUMP))
-    {
-        if (VM_OnEvent(EVENT_SWIMUP, pPlayer->i, playerNum) == 0)
-            pPlayer->vel.z = max(min(-pPlayer->swimzincrement, pPlayer->vel.z - pPlayer->swimzincrement), -pPlayer->maxswimzvel);
-    }
-    else if (TEST_SYNC_KEY(playerBits, SK_CROUCH))
-    {
-        if (VM_OnEvent(EVENT_SWIMDOWN, pPlayer->i, playerNum) == 0)
-            pPlayer->vel.z = min<int>(max<int>(pPlayer->swimzincrement, pPlayer->vel.z + pPlayer->swimzincrement), pPlayer->maxswimzvel);
-    }
-    else
-    {
-        // normal view
-        if (pPlayer->vel.z < 0)
-            pPlayer->vel.z = min(0, pPlayer->vel.z + pPlayer->minswimzvel);
-
-        if (pPlayer->vel.z > 0)
-            pPlayer->vel.z = max(0, pPlayer->vel.z - pPlayer->minswimzvel);
-    }
-
-    if (pPlayer->vel.z > 2048)
-        pPlayer->vel.z >>= 1;
-
-    pPlayer->pos.z += pPlayer->vel.z;
-
-    if (pPlayer->pos.z > (floorZ-(15<<8)))
-        pPlayer->pos.z += ((floorZ-(15<<8))-pPlayer->pos.z)>>1;
-
-    if (pPlayer->pos.z < ceilZ)
-    {
-        pPlayer->pos.z = ceilZ;
-        pPlayer->vel.z = 0;
-    }
-
-    if ((pPlayer->on_warping_sector == 0 || ceilZ != pPlayer->truecz) && pPlayer->pos.z < ceilZ + PMINHEIGHT)
-    {
-        pPlayer->pos.z = ceilZ + PMINHEIGHT;
-        pPlayer->vel.z = 0;
-    }
-
-#ifndef EDUKE32_STANDALONE
-    if (!FURY && pPlayer->scuba_on && (krand()&255) < 8)
-    {
-        int const spriteNum = A_Spawn(pPlayer->i, WATERBUBBLE);
-        int const q16ang      = fix16_to_int(pPlayer->q16ang);
-
-        sprite[spriteNum].x      += sintable[(q16ang + 512 + 64 - (g_globalRandom & 128)) & 2047] >> 6;
-        sprite[spriteNum].y      += sintable[(q16ang + 64 - (g_globalRandom & 128)) & 2047] >> 6;
-        sprite[spriteNum].xrepeat = 3;
-        sprite[spriteNum].yrepeat = 2;
-        sprite[spriteNum].z       = pPlayer->pos.z + ZOFFSET3;
-    }
-#endif
-}
-static void P_DoJetpack(int const playerNum, int const playerBits, int const playerShrunk, int const sectorLotag, int const floorZ)
-{
-    auto const pPlayer = g_player[playerNum].ps;
-
-    pPlayer->on_ground       = 0;
-    pPlayer->jumping_counter = 0;
-    pPlayer->hard_landing    = 0;
-    pPlayer->falling_counter = 0;
-    pPlayer->pycount        += 32;
-    pPlayer->pycount        &= 2047;
-    pPlayer->pyoff           = sintable[pPlayer->pycount] >> 7;
-
-    g_player[playerNum].horizSkew = 0;
-
-    if (pPlayer->jetpack_on < 11)
-    {
-        pPlayer->jetpack_on++;
-        pPlayer->pos.z -= (pPlayer->jetpack_on<<7); //Goin up
-    }
-    else if (pPlayer->jetpack_on == 11 && !A_CheckSoundPlaying(pPlayer->i, DUKE_JETPACK_IDLE))
-        A_PlaySound(DUKE_JETPACK_IDLE, pPlayer->i);
-
-    int const zAdjust = pPlayer->jetpackzincrement >> (playerShrunk << 1);
-
-    if (TEST_SYNC_KEY(playerBits, SK_JUMP))  // jumping, flying up
-    {
-        if (VM_OnEvent(EVENT_SOARUP, pPlayer->i, playerNum) == 0)
-        {
-            pPlayer->pos.z -= zAdjust;
-            pPlayer->crack_time = PCRACKTIME;
-        }
-    }
-
-    if (TEST_SYNC_KEY(playerBits, SK_CROUCH))  // crouching, flying down
-    {
-        if (VM_OnEvent(EVENT_SOARDOWN, pPlayer->i, playerNum) == 0)
-        {
-            pPlayer->pos.z += zAdjust;
-            pPlayer->crack_time = PCRACKTIME;
-        }
-    }
-
-    int const Zdiff = (playerShrunk == 0 && (sectorLotag == 0 || sectorLotag == ST_2_UNDERWATER)) ? 32 : 16;
-
-    if (sectorLotag != ST_2_UNDERWATER && pPlayer->scuba_on == 1)
-        pPlayer->scuba_on = 0;
-
-    if (pPlayer->pos.z > (floorZ - (Zdiff << 8)))
-        pPlayer->pos.z += ((floorZ - (Zdiff << 8)) - pPlayer->pos.z) >> 1;
-
-    if (pPlayer->pos.z < (actor[pPlayer->i].ceilingz + (18 << 8)))
-        pPlayer->pos.z = actor[pPlayer->i].ceilingz + (18 << 8);
-}
-
-static void P_Dead(int const playerNum, int const sectorLotag, int const floorZ, int const ceilZ)
-{
-    auto const pPlayer = g_player[playerNum].ps;
-    auto const pSprite = &sprite[pPlayer->i];
-
-    if (ud.recstat == 1 && (!g_netServer && ud.multimode < 2))
-        G_CloseDemoWrite();
-
-    if ((numplayers < 2 || g_netServer) && pPlayer->dead_flag == 0)
-        P_FragPlayer(playerNum);
-
-    if (sectorLotag == ST_2_UNDERWATER)
-    {
-        if (pPlayer->on_warping_sector == 0)
-        {
-            if (klabs(pPlayer->pos.z-floorZ) >(pPlayer->spritezoffset>>1))
-                pPlayer->pos.z += 348;
-        }
-        else
-        {
-            pSprite->z -= 512;
-            pSprite->zvel = -348;
-        }
-
-        clipmove(&pPlayer->pos, &pPlayer->cursectnum,
-            0, 0, pPlayer->clipdist, (4L<<8), (4L<<8), CLIPMASK0);
-        //                        p->bobcounter += 32;
-    }
-
-    Bmemcpy(&pPlayer->opos, &pPlayer->pos, sizeof(vec3_t));
-    pPlayer->oq16ang = pPlayer->q16ang;
-    pPlayer->opyoff = pPlayer->pyoff;
-
-    pPlayer->q16horiz = F16(100);
-    pPlayer->q16horizoff = 0;
-
-    updatesector(pPlayer->pos.x, pPlayer->pos.y, &pPlayer->cursectnum);
-
-    pushmove(&pPlayer->pos, &pPlayer->cursectnum, 128L, (4L<<8), (20L<<8), CLIPMASK0);
-
-    if (floorZ > ceilZ + ZOFFSET2 && pSprite->pal != 1)
-    {
-        pPlayer->orotscrnang = pPlayer->rotscrnang;
-        pPlayer->rotscrnang = (pPlayer->dead_flag + ((floorZ + pPlayer->pos.z) >> 7)) & 2047;
-    }
-
-    pPlayer->on_warping_sector = 0;
-}
-
-
-// Duke3D needs the player sprite to actually be in the floor when shrunk in order to walk under enemies.
-// This sucks.
-static void P_ClampZ(DukePlayer_t* const pPlayer, int const sectorLotag, int32_t const ceilZ, int32_t const floorZ)
-{
-#ifndef EDUKE32_STANDALONE
-    auto const pSprite      = &sprite[pPlayer->i];
-    int const  playerShrunk = (pSprite->yrepeat < 32);
-
-    if (!FURY && playerShrunk)
-        return;
-#endif
-
-    if ((sectorLotag != ST_2_UNDERWATER || ceilZ != pPlayer->truecz) && pPlayer->pos.z < ceilZ + PMINHEIGHT)
-        pPlayer->pos.z = ceilZ + PMINHEIGHT;
-
-    if (sectorLotag != ST_1_ABOVE_WATER && pPlayer->pos.z > floorZ - PMINHEIGHT)
-        pPlayer->pos.z = floorZ - PMINHEIGHT;
-}
-
-
-#define GETZRANGECLIPDISTOFFSET 16
-
-void P_ProcessInput(int playerNum)
-{
-    auto &thisPlayer = g_player[playerNum];
-
-    if (thisPlayer.playerquitflag == 0)
-        return;
-
-    thisPlayer.smoothcamera = false;
-    thisPlayer.horizAngleAdjust = 0;
-    thisPlayer.horizSkew        = 0;
-
-    auto const pPlayer = thisPlayer.ps;
-    auto const pSprite = &sprite[pPlayer->i];
-
-    ++pPlayer->player_par;
-
-    VM_OnEvent(EVENT_PROCESSINPUT, pPlayer->i, playerNum);
-
-    auto &pInput = thisPlayer.input;
-    uint32_t playerBits = pInput.bits;
-
-    if (pPlayer->cheat_phase > 0)
-        playerBits = 0;
-
-    if (pPlayer->cursectnum == -1)
-    {
-        if (pSprite->extra > 0 && ud.noclip == 0)
-        {
-            LOG_F(WARNING, "%s: player killed by cursectnum == -1!", EDUKE32_FUNCTION);
-            P_QuickKill(pPlayer);
-#ifndef EDUKE32_STANDALONE
-            if (!FURY)
-                A_PlaySound(SQUISHED, pPlayer->i);
-#endif
-        }
-
-        pPlayer->cursectnum = 0;
-    }
-
-    // sectorLotag can be set to 0 later on, but the same block sets spritebridge to 1
-    int sectorLotag       = sector[pPlayer->cursectnum].lotag;
-    int getZRangeClipDist = pPlayer->clipdist - GETZRANGECLIPDISTOFFSET;
-    int getZRangeOffset   = (((TEST_SYNC_KEY(playerBits, SK_CROUCH) && sectorLotag != ST_2_UNDERWATER && (FURY || (pPlayer->on_ground && !pPlayer->jumping_toggle)))
-                            || (sectorLotag == ST_1_ABOVE_WATER && pPlayer->spritebridge != 1)))
-                            ? pPlayer->autostep_sbw
-                            : pPlayer->autostep;
-
-    int32_t floorZ, ceilZ, highZhit, lowZhit;
-    int const stepHeight = getZRangeOffset;
-
-    // if not running Ion Fury, purposely break part of the clipping system
-    // this is what makes Duke step up onto sprite constructions he shouldn't automatically step up onto
-    if (!FURY)
-    {
-        getZRangeOffset   = 0;
-        getZRangeClipDist = pPlayer->clipdist - 1;
-    }
-    else
-    {
-        // we want to take these into account for getzrange() but not for the clipmove() call below
-        // this isn't taken into account when getZRangeOffset is initialized above because we first need
-        // the stepHeight value without this factored in
-        if (sectorLotag != ST_2_UNDERWATER)
-        {
-            if (pPlayer->pos.z + getZRangeOffset > actor[pPlayer->i].floorz - PMINHEIGHT)
-                getZRangeOffset -= klabs((pPlayer->pos.z + getZRangeOffset) - (actor[pPlayer->i].floorz - PMINHEIGHT));
-            else if (pPlayer->pos.z + getZRangeOffset < actor[pPlayer->i].ceilingz + PMINHEIGHT)
-                getZRangeOffset += klabs((actor[pPlayer->i].ceilingz + PMINHEIGHT) - (pPlayer->pos.z + getZRangeOffset));
-        }
-    }
-
-    pPlayer->pos.z += getZRangeOffset;
-    getzrange(&pPlayer->pos, pPlayer->cursectnum, &ceilZ, &highZhit, &floorZ, &lowZhit, getZRangeClipDist, CLIPMASK0);
-    pPlayer->pos.z -= getZRangeOffset;
-
-    pPlayer->spritebridge = 0;
-    pPlayer->sbs          = 0;
-
-#ifdef YAX_ENABLE
-    yax_getzsofslope(pPlayer->cursectnum, pPlayer->pos.x, pPlayer->pos.y, &pPlayer->truecz, &pPlayer->truefz);
-#else
-    getcorrectzsofslope(pPlayer->cursectnum, pPlayer->pos.x, pPlayer->pos.y, &pPlayer->truecz, &pPlayer->truefz);
-#endif
-
-    int const trueFloorZ    = pPlayer->truefz;
-    int const trueFloorDist = klabs(pPlayer->pos.z - trueFloorZ);
-    int const playerShrunk  = (pSprite->yrepeat < 32);
-
-    if ((lowZhit & 49152) == 16384 && sectorLotag == 1 && trueFloorDist > pPlayer->spritezoffset + ZOFFSET2)
-        sectorLotag = 0;
-
-    if ((highZhit & 49152) == 49152)
-    {
-        int const spriteNum = highZhit & (MAXSPRITES-1);
-
-        if ((spriteNum != pPlayer->i && sprite[spriteNum].z + PMINHEIGHT > pPlayer->pos.z)
-            || (!playerShrunk && sprite[spriteNum].statnum == STAT_ACTOR && sprite[spriteNum].extra >= 0))
-        {
-            highZhit = 0;
-            ceilZ    = pPlayer->truecz;
-        }
-    }
-
-    actor[pPlayer->i].floorz   = floorZ;
-    actor[pPlayer->i].ceilingz = ceilZ;
-
-    if ((lowZhit & 49152) == 49152)
-    {
-        int spriteNum = lowZhit&(MAXSPRITES-1);
-
-        if ((sprite[spriteNum].cstat&33) == 33 || (sprite[spriteNum].cstat&17) == 17 ||
-                clipshape_idx_for_sprite((uspriteptr_t)&sprite[spriteNum], -1) >= 0)
-        {
-            // EDuke32 extension: xvel of 1 makes a sprite be never regarded as a bridge.
-
-            if (sectorLotag != ST_2_UNDERWATER && (sprite[spriteNum].xvel & 1) == 0)
-            {
-                sectorLotag             = 0;
-                pPlayer->footprintcount = 0;
-                pPlayer->spritebridge   = 1;
-                pPlayer->sbs            = spriteNum;
-            }
-        }
-        else if (A_CheckEnemySprite(&sprite[spriteNum]) && sprite[spriteNum].xrepeat > 24
-                 && klabs(pSprite->z - sprite[spriteNum].z) < (84 << 8))
-        {
-            // TX: I think this is what makes the player slide off enemies... might
-            // be a good sprite flag to add later.
-            // Helix: there's also SLIDE_ABOVE_ENEMY.
-            int spriteAng = getangle(sprite[spriteNum].x - pPlayer->pos.x,
-                                       sprite[spriteNum].y - pPlayer->pos.y);
-            pPlayer->vel.x -= sintable[(spriteAng + 512) & 2047] << 4;
-            pPlayer->vel.y -= sintable[spriteAng & 2047] << 4;
-        }
-    }
-
-    if (pSprite->extra > 0)
-        P_IncurDamage(pPlayer);
-    else
-    {
-        pSprite->extra                  = 0;
-        pPlayer->inv_amount[GET_SHIELD] = 0;
-    }
-
-    pPlayer->last_extra = pSprite->extra;
-    pPlayer->loogcnt    = (pPlayer->loogcnt > 0) ? pPlayer->loogcnt - 1 : 0;
-
-    if (pPlayer->fist_incs && P_DoFist(pPlayer)) return;
-
-    if (pPlayer->timebeforeexit > 1 && pPlayer->last_extra > 0)
-    {
-        if (--pPlayer->timebeforeexit == GAMETICSPERSEC*5)
-        {
-            FX_StopAllSounds();
-            S_ClearSoundLocks();
-
-            if (pPlayer->customexitsound >= 0)
-            {
-                S_PlaySound(pPlayer->customexitsound);
-                P_DoQuote(QUOTE_WEREGONNAFRYYOURASS,pPlayer);
-            }
-        }
-        else if (pPlayer->timebeforeexit == 1)
-        {
-            P_EndLevel();
-            return;
-        }
-    }
-
-    if (pPlayer->pals.f > 0)
-        pPlayer->pals.f--;
-
-    if (pPlayer->fta > 0 && --pPlayer->fta == 0)
-    {
-        pub = pus = NUMPAGES;
-        pPlayer->ftq = 0;
-    }
-
-    if (g_levelTextTime > 0)
-        g_levelTextTime--;
-
-    if (pSprite->extra <= 0 && !ud.god)
-    {
-        P_Dead(playerNum, sectorLotag, floorZ, ceilZ);
+        RESET(sp->cstat, CSTAT_SPRITE_YCENTER);
+        RESET(pp->Flags, PF_SWIMMING);
+        DoPlayerBeginRun(pp);
+        // smooth the transition by updating the sprite now
+        //UpdatePlayerSprite(pp);
         return;
     }
 
-    if (pPlayer->transporter_hold > 0)
+    // Move around
+    DoPlayerMove(pp);
+
+    if (PlayerCanDive(pp))
+        return;
+
+    if (!TEST(pp->Flags, PF_PLAYER_MOVED))
     {
-        pPlayer->transporter_hold--;
-        if (pPlayer->transporter_hold == 0 && pPlayer->on_warping_sector)
-            pPlayer->transporter_hold = 2;
-    }
-    else if (pPlayer->transporter_hold < 0)
-        pPlayer->transporter_hold++;
-
-    if (pPlayer->newowner >= 0)
-    {
-        P_UpdatePosWhenViewingCam(pPlayer);
-        P_DoCounters(playerNum);
-
-        if (PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == HANDREMOTE_WEAPON)
-            P_ProcessWeapon(playerNum);
-
+        RESET(sp->cstat, CSTAT_SPRITE_YCENTER);
+        RESET(pp->Flags, PF_SWIMMING);
+        DoPlayerBeginWade(pp);
+        DoPlayerWade(pp);
         return;
     }
-
-    pPlayer->orotscrnang = pPlayer->rotscrnang;
-
-    if (pPlayer->rotscrnang)
-    {
-        pPlayer->rotscrnang -= (pPlayer->rotscrnang >> 1);
-
-        if (pPlayer->rotscrnang && !(pPlayer->rotscrnang >> 1))
-            pPlayer->rotscrnang -= ksgn(pPlayer->rotscrnang);
-    }
-
-    pPlayer->olook_ang   = pPlayer->look_ang;
-
-    if (pPlayer->look_ang)
-    {
-        pPlayer->look_ang -= (pPlayer->look_ang >> 2);
-
-        if (pPlayer->look_ang && !(pPlayer->look_ang >> 2))
-            pPlayer->look_ang -= ksgn(pPlayer->look_ang);
-    }
-
-    if (TEST_SYNC_KEY(playerBits, SK_LOOK_LEFT))
-    {
-        // look_left
-        if (VM_OnEvent(EVENT_LOOKLEFT,pPlayer->i,playerNum) == 0)
-        {
-            pPlayer->look_ang -= 152;
-            pPlayer->rotscrnang += 24;
-        }
-    }
-
-    if (TEST_SYNC_KEY(playerBits, SK_LOOK_RIGHT))
-    {
-        // look_right
-        if (VM_OnEvent(EVENT_LOOKRIGHT,pPlayer->i,playerNum) == 0)
-        {
-            pPlayer->look_ang += 152;
-            pPlayer->rotscrnang -= 24;
-        }
-    }
-
-    int                  velocityModifier = TICSPERFRAME;
-    const uint8_t *const weaponFrame      = &pPlayer->kickback_pic;
-    int                  floorZOffset     = pPlayer->floorzoffset;
-    vec3_t const         backupPos        = pPlayer->opos;
-
-    if (pPlayer->on_crane >= 0)
-        goto HORIZONLY;
-
-    pPlayer->weapon_sway = (pSprite->xvel < 32 || pPlayer->on_ground == 0 || pPlayer->bobcounter == 1024)
-                           ? (((pPlayer->weapon_sway & 2047) > (1024 + 96))
-                           ? (pPlayer->weapon_sway - 96)
-                           : (((pPlayer->weapon_sway & 2047) < (1024 - 96)))
-                           ? (pPlayer->weapon_sway + 96)
-                           : 1024)
-                           : pPlayer->bobcounter;
-
-    // NOTE: This silently wraps if the difference is too great, e.g. used to do
-    // that when teleported by silent SE7s.
-    pSprite->xvel = ksqrt(uhypsq(pPlayer->pos.x - pPlayer->bobpos.x, pPlayer->pos.y - pPlayer->bobpos.y));
-
-    if (pPlayer->on_ground)
-        pPlayer->bobcounter += sprite[pPlayer->i].xvel>>1;
-
-    if (ud.noclip == 0 && ((uint16_t)pPlayer->cursectnum >= MAXSECTORS || sector[pPlayer->cursectnum].floorpicnum == MIRROR))
-        pPlayer->pos.xy = pPlayer->opos.xy;
-    else
-        pPlayer->opos.xy = pPlayer->pos.xy;
-
-    pPlayer->bobpos  = pPlayer->pos.xy;
-    pPlayer->opos.z  = pPlayer->pos.z;
-    pPlayer->opyoff  = pPlayer->pyoff;
-
-    updatesector(pPlayer->pos.x, pPlayer->pos.y, &pPlayer->cursectnum);
-
-    if (!ud.noclip)
-        pushmove(&pPlayer->pos, &pPlayer->cursectnum, pPlayer->clipdist - 1, (4L<<8), stepHeight, CLIPMASK0);
-
-    // Shrinking code
-
-    if (sectorLotag == ST_2_UNDERWATER)
-        P_DoWater(playerNum, playerBits, floorZ, ceilZ);
-    else if (pPlayer->jetpack_on)
-        P_DoJetpack(playerNum, playerBits, playerShrunk, sectorLotag, floorZ);
-    else
-    {
-        pPlayer->airleft  = 15 * GAMETICSPERSEC;  // 13 seconds
-        pPlayer->scuba_on = 0;
-
-        if (sectorLotag == ST_1_ABOVE_WATER && pPlayer->spritebridge == 0)
-        {
-            floorZOffset = pPlayer->shrunkzoffset;
-
-            if (!playerShrunk)
-            {
-                floorZOffset      = pPlayer->waterzoffset;
-                pPlayer->pycount += 32;
-                pPlayer->pycount &= 2047;
-                pPlayer->pyoff    = sintable[pPlayer->pycount] >> 6;
-
-                if (trueFloorDist <= pPlayer->spritezoffset)
-                {
-                    if (pPlayer->on_ground == 1)
-                    {
-#ifdef YAX_ENABLE
-                        if (yax_getbunch(pPlayer->cursectnum, YAX_FLOOR) == -1)
+}
 #endif
-                        {
-                            if (pPlayer->dummyplayersprite < 0)
-                                pPlayer->dummyplayersprite = A_Spawn(pPlayer->i,PLAYERONWATER);
 
-                            sprite[pPlayer->dummyplayersprite].cstat |= 32768;
-                            sprite[pPlayer->dummyplayersprite].pal = sprite[pPlayer->i].pal;
-                        }
-                        pPlayer->footprintpal                  = (sector[pPlayer->cursectnum].floorpicnum == FLOORSLIME) ? 8 : 0;
-                        pPlayer->footprintshade                = 0;
-                    }
-                }
-            }
-        }
-        else if (pPlayer->footprintcount > 0 && pPlayer->on_ground)
+void
+DoPlayerBeginCrawl(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    RESET(pp->Flags, PF_FALLING | PF_JUMPING);
+    SET(pp->Flags, PF_CRAWLING);
+    SET(pp->Flags2, PF2_INPUT_CAN_TURN|PF2_INPUT_CAN_AIM);
+
+    pp->friction = PLAYER_CRAWL_FRICTION;
+    pp->floor_dist = PLAYER_CRAWL_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_CRAWL_CEILING_DIST;
+    pp->DoPlayerAction = DoPlayerCrawl;
+
+    //pp->posz = pp->loz - PLAYER_CRAWL_HEIGHT;
+
+    NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Crawl);
+}
+
+SWBOOL PlayerFallTest(PLAYERp pp, int player_height)
+{
+    // If the floor is far below you, fall hard instead of adjusting height
+    if (labs(pp->posz - pp->loz) > player_height + PLAYER_FALL_HEIGHT)
+    {
+        // if on a STEEP slope sector and you have not moved off of the sector
+        if (pp->lo_sectp &&
+            labs(pp->lo_sectp->floorheinum) > 3000 &&
+            TEST(pp->lo_sectp->floorstat, FLOOR_STAT_SLOPE) &&
+            pp->lo_sectp == &sector[pp->lastcursectnum])
         {
-            if (pPlayer->cursectnum >= 0 && (sector[pPlayer->cursectnum].floorstat & 2) != 2)
-            {
-                int spriteNum = -1;
-
-                for (spriteNum = headspritesect[pPlayer->cursectnum]; spriteNum >= 0; spriteNum = nextspritesect[spriteNum])
-                {
-                    if (sprite[spriteNum].picnum == FOOTPRINTS || sprite[spriteNum].picnum == FOOTPRINTS2 ||
-                        sprite[spriteNum].picnum == FOOTPRINTS3 || sprite[spriteNum].picnum == FOOTPRINTS4)
-                    {
-                        if (klabs(sprite[spriteNum].x - pPlayer->pos.x) < 384 &&
-                            klabs(sprite[spriteNum].y - pPlayer->pos.y) < 384)
-                            break;
-                    }
-                }
-
-                if (spriteNum < 0)
-                {
-                    if (sector[pPlayer->cursectnum].lotag == 0 &&
-                        sector[pPlayer->cursectnum].hitag == 0)
-#ifdef YAX_ENABLE
-                        if (yax_getbunch(pPlayer->cursectnum, YAX_FLOOR) < 0 || (sector[pPlayer->cursectnum].floorstat & 512))
-#endif
-                        {
-                            switch (krand() & 3)
-                            {
-                                case 0: spriteNum  = A_Spawn(pPlayer->i, FOOTPRINTS); break;
-                                case 1: spriteNum  = A_Spawn(pPlayer->i, FOOTPRINTS2); break;
-                                case 2: spriteNum  = A_Spawn(pPlayer->i, FOOTPRINTS3); break;
-                                default: spriteNum = A_Spawn(pPlayer->i, FOOTPRINTS4); break;
-                            }
-                            sprite[spriteNum].pal   = pPlayer->footprintpal;
-                            sprite[spriteNum].shade = pPlayer->footprintshade;
-                            pPlayer->footprintcount--;
-                        }
-                }
-            }
-        }
-
-        if (pPlayer->pos.z < (floorZ-floorZOffset))  //falling
-        {
-            // this is what keeps you glued to the ground when you're running down slopes
-            if ((!TEST_SYNC_KEY(playerBits, SK_JUMP) && !(TEST_SYNC_KEY(playerBits, SK_CROUCH))) && pPlayer->on_ground &&
-                (sector[pPlayer->cursectnum].floorstat & 2) && pPlayer->pos.z >= (floorZ - floorZOffset - ZOFFSET2))
-                pPlayer->pos.z = floorZ - floorZOffset;
-            else
-            {
-                pPlayer->vel.z += pPlayer->gravity;  // (TICSPERFRAME<<6);
-
-                if (pPlayer->vel.z >= ACTOR_MAXFALLINGZVEL)
-                    pPlayer->vel.z = ACTOR_MAXFALLINGZVEL;
-
-                if (pPlayer->vel.z > 2400 && pPlayer->falling_counter < 255)
-                {
-                    pPlayer->falling_counter++;
-                    if (pPlayer->falling_counter >= 38 && pPlayer->scream_voice <= FX_Ok)
-                    {
-                        int32_t voice = A_PlaySound(DUKE_SCREAM,pPlayer->i);
-                        if (voice <= 127)  // XXX: p->scream_voice is an int8_t
-                            pPlayer->scream_voice = voice;
-                    }
-                }
-
-                if ((pPlayer->pos.z + pPlayer->vel.z) >= (floorZ - floorZOffset) && pPlayer->cursectnum >= 0)  // hit the ground
-                {
-                    if (sector[pPlayer->cursectnum].lotag != ST_1_ABOVE_WATER)
-                    {
-                        if (pPlayer->falling_counter > 62)
-                            P_QuickKill(pPlayer);
-                        else if (pPlayer->falling_counter > 9)
-                        {
-                            // Falling damage.
-                            pSprite->extra -= pPlayer->falling_counter - (krand() & 3);
-
-#ifndef EDUKE32_STANDALONE
-                            if (!FURY)
-                            {
-                                if (pSprite->extra <= 0)
-                                    A_PlaySound(SQUISHED, pPlayer->i);
-                                else
-                                {
-                                    A_PlaySound(DUKE_LAND, pPlayer->i);
-                                    A_PlaySound(DUKE_LAND_HURT, pPlayer->i);
-                                }
-                            }
-#endif
-                            P_PalFrom(pPlayer, 32, 16, 0, 0);
-                        }
-#ifndef EDUKE32_STANDALONE
-                        else if (!FURY && pPlayer->vel.z > 2048)
-                            A_PlaySound(DUKE_LAND, pPlayer->i);
-#endif
-                    }
-                }
-                else
-                    pPlayer->on_ground = 0;
-            }
+            return FALSE;
         }
         else
         {
-            pPlayer->falling_counter = 0;
+            return TRUE;
+        }
+    }
 
-            if (pPlayer->scream_voice > FX_Ok)
+    return FALSE;
+}
+
+void
+DoPlayerCrawl(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    if (pp->cursectnum >= 0 && SectorIsUnderwaterArea(pp->cursectnum))
+    {
+        // if stacked water - which it should be
+        if (FAF_ConnectArea(pp->cursectnum))
+        {
+            // adjust the z
+            pp->posz = sector[pp->cursectnum].ceilingz + Z(12);
+        }
+
+        DoPlayerBeginDiveNoWarp(pp);
+        return;
+    }
+
+    // Current Z position, adjust down to the floor, adjust to player height,
+    // adjust for "bump head"
+//#define PLAYER_STANDING_ROOM(pp) ((pp)->posz + PLAYER_CRAWL_HEIGHT - PLAYER_HEIGHT - PLAYER_RUN_CEILING_DIST)
+#define PLAYER_STANDING_ROOM Z(68)
+
+    if (TEST(pp->Flags, PF_LOCK_CRAWL))
+    {
+        if (TEST_SYNC_KEY(pp, SK_CRAWL_LOCK))
+        {
+            if (FLAG_KEY_PRESSED(pp, SK_CRAWL_LOCK))
             {
-                FX_StopSound(pPlayer->scream_voice);
-                S_Cleanup();
-                pPlayer->scream_voice = -1;
-            }
-
-            if (sectorLotag != ST_1_ABOVE_WATER &&
-                (pPlayer->on_ground == 0 && pPlayer->vel.z > (ACTOR_MAXFALLINGZVEL >> 1)))
-            {
-                pPlayer->hard_landing = pPlayer->vel.z >> 10;
-                I_AddForceFeedback((pPlayer->hard_landing << FF_PLAYER_DMG_SCALE), (pPlayer->hard_landing << FF_PLAYER_DMG_SCALE), (pPlayer->hard_landing << FF_PLAYER_TIME_SCALE));
-            }
-
-            pPlayer->on_ground = 1;
-
-            if (floorZOffset==pPlayer->floorzoffset)
-            {
-                //Smooth on the ground
-                int Zdiff = ((floorZ - floorZOffset) - pPlayer->pos.z) >> 1;
-
-                if (klabs(Zdiff) < 256)
-                    Zdiff = 0;
-                else if (!playerShrunk)
-                    pPlayer->pos.z += Zdiff;
-
-                pPlayer->vel.z -= 768;
-
-                if (pPlayer->vel.z < 0)
-                    pPlayer->vel.z = 0;
-            }
-            else if (pPlayer->jumping_counter == 0)
-            {
-                pPlayer->pos.z += ((floorZ - (floorZOffset >> 1)) - pPlayer->pos.z) >> 1;  // Smooth on the water
-
-                if (pPlayer->on_warping_sector == 0 && pPlayer->pos.z > floorZ - pPlayer->minwaterzdist)
+                //if (pp->hiz < PLAYER_STANDING_ROOM(pp))
+                if (labs(pp->loz - pp->hiz) >= PLAYER_STANDING_ROOM)
                 {
-                    pPlayer->pos.z = floorZ - pPlayer->minwaterzdist;
-                    pPlayer->vel.z >>= 1;
-                }
-            }
+                    FLAG_KEY_RELEASE(pp, SK_CRAWL_LOCK);
 
-            if (TEST_SYNC_KEY(playerBits, SK_CROUCH))
-            {
-                // crouching
-                if (VM_OnEvent(EVENT_CROUCH,pPlayer->i,playerNum) == 0)
-                {
-                    if (pPlayer->jumping_toggle == 0)
-                    {
-                        pPlayer->pos.z += pPlayer->crouchzincrement;
-                        pPlayer->crack_time = PCRACKTIME;
-                    }
-                }
-            }
-
-            // jumping
-            if (!TEST_SYNC_KEY(playerBits, SK_JUMP) && pPlayer->jumping_toggle)
-                pPlayer->jumping_toggle--;
-            else if (TEST_SYNC_KEY(playerBits, SK_JUMP) && pPlayer->jumping_toggle == 0 && !pPlayer->jumping_counter)
-            {
-                // dummy variables must be separate, otherwise breaks TROR computation
-                int32_t floorZ2, ceilZ2, dummy, dummy2;
-
-                getzrange(&pPlayer->pos, pPlayer->cursectnum, &ceilZ2, &dummy, &floorZ2, &dummy2, getZRangeClipDist, CLIPMASK0);
-
-                if (klabs(floorZ2-ceilZ2) > pPlayer->spritezoffset + ZOFFSET3)
-                {
-                    if (VM_OnEvent(EVENT_JUMP,pPlayer->i,playerNum) == 0)
-                    {
-                        pPlayer->jumping_toggle = 1;
-
-                        if (!TEST_SYNC_KEY(playerBits, SK_CROUCH))
-                            pPlayer->jumping_counter = 1;
-                        else
-                        {
-                            pPlayer->jumping_toggle = 2;
-
-                            if (myconnectindex == playerNum)
-                                CONTROL_ClearButton(gamefunc_Jump);
-                        }
-                    }
-                }
-            }
-        }
-
-        if (pPlayer->jumping_counter)
-        {
-            if (!TEST_SYNC_KEY(playerBits, SK_JUMP) && pPlayer->jumping_toggle)
-                pPlayer->jumping_toggle--;
-
-            if (pPlayer->jumping_counter < (1024+256))
-            {
-                if (sectorLotag == ST_1_ABOVE_WATER && pPlayer->jumping_counter > 768)
-                {
-                    pPlayer->jumping_counter = 0;
-                    pPlayer->vel.z = -512;
-                }
-                else
-                {
-                    pPlayer->vel.z -= (sintable[(2048-128+pPlayer->jumping_counter)&2047])/12;
-                    pPlayer->jumping_counter += 180;
-                    pPlayer->on_ground = 0;
-                }
-            }
-            else
-            {
-                pPlayer->jumping_counter = 0;
-                pPlayer->vel.z = 0;
-            }
-        }
-
-        if (ceilZ != pPlayer->truecz && pPlayer->jumping_counter && pPlayer->pos.z <= (ceilZ + PMINHEIGHT + 128))
-        {
-            pPlayer->jumping_counter = 0;
-            if (pPlayer->vel.z < 0)
-                pPlayer->vel.x = pPlayer->vel.y = 0;
-            pPlayer->vel.z = 128;
-        }
-    }
-
-    if (P_CheckLockedMovement(playerNum) & IL_NOMOVE)
-    {
-        velocityModifier = 0;
-        pPlayer->vel.x   = 0;
-        pPlayer->vel.y   = 0;
-    }
-    else if (pInput.q16avel)
-        pPlayer->crack_time = PCRACKTIME;
-
-    if (pPlayer->spritebridge == 0)
-    {
-        int const floorPicnum = sector[pSprite->sectnum].floorpicnum;
-
-#ifndef EDUKE32_STANDALONE
-        if (!FURY && (floorPicnum == PURPLELAVA || sector[pSprite->sectnum].ceilingpicnum == PURPLELAVA))
-        {
-            if (pPlayer->inv_amount[GET_BOOTS] > 0)
-            {
-                pPlayer->inv_amount[GET_BOOTS]--;
-                pPlayer->inven_icon = ICON_BOOTS;
-                if (pPlayer->inv_amount[GET_BOOTS] <= 0)
-                    P_SelectNextInvItem(pPlayer);
-            }
-            else
-            {
-                if (!A_CheckSoundPlaying(pPlayer->i,DUKE_LONGTERM_PAIN))
-                    A_PlaySound(DUKE_LONGTERM_PAIN,pPlayer->i);
-                P_PalFrom(pPlayer, 32, 0, 8, 0);
-                pSprite->extra--;
-            }
-        }
-#endif
-        if (pPlayer->on_ground && trueFloorDist <= pPlayer->spritezoffset+ZOFFSET2 && P_CheckFloorDamage(pPlayer, floorPicnum))
-        {
-            P_DoQuote(QUOTE_BOOTS_ON, pPlayer);
-            pPlayer->inv_amount[GET_BOOTS] -= 2;
-            if (pPlayer->inv_amount[GET_BOOTS] <= 0)
-            {
-                pPlayer->inv_amount[GET_BOOTS] = 0;
-                P_SelectNextInvItem(pPlayer);
-            }
-        }
-    }
-
-    if (pInput.extbits & BIT(EK_MOVE_FORWARD))         VM_OnEvent(EVENT_MOVEFORWARD,  pPlayer->i, playerNum);
-    if (pInput.extbits & BIT(EK_MOVE_BACKWARD))        VM_OnEvent(EVENT_MOVEBACKWARD, pPlayer->i, playerNum);
-    if (pInput.extbits & BIT(EK_STRAFE_LEFT))  VM_OnEvent(EVENT_STRAFELEFT,   pPlayer->i, playerNum);
-    if (pInput.extbits & BIT(EK_STRAFE_RIGHT)) VM_OnEvent(EVENT_STRAFERIGHT,  pPlayer->i, playerNum);
-
-    if (pInput.extbits & BIT(EK_TURN_LEFT) || pInput.q16avel < 0)
-        VM_OnEvent(EVENT_TURNLEFT, pPlayer->i, playerNum);
-
-    if (pInput.extbits & BIT(EK_TURN_RIGHT) || pInput.q16avel > 0)
-        VM_OnEvent(EVENT_TURNRIGHT, pPlayer->i, playerNum);
-
-    if (pPlayer->vel.x || pPlayer->vel.y || pInput.fvel || pInput.svel)
-    {
-        pPlayer->crack_time = PCRACKTIME;
-
-#ifndef EDUKE32_STANDALONE
-        if (!FURY && pPlayer->cursectnum != -1)
-        {
-            int const checkWalkSound = sintable[pPlayer->bobcounter & 2047] >> 12;
-
-            if (trueFloorDist <= pPlayer->spritezoffset + ZOFFSET2)
-            {
-                if (checkWalkSound == 1 || checkWalkSound == 3)
-                {
-                    if (pPlayer->walking_snd_toggle == 0 && pPlayer->on_ground)
-                    {
-                        switch (sectorLotag)
-                        {
-                            case 0:
-                            {
-                                int const walkPicnum = (lowZhit >= 0 && (lowZhit & 49152) == 49152)
-                                                       ? TrackerCast(sprite[lowZhit & (MAXSPRITES - 1)].picnum)
-                                                       : TrackerCast(sector[pPlayer->cursectnum].floorpicnum);
-
-                                switch (tileGetMapping(walkPicnum))
-                                {
-                                    case PANNEL1__:
-                                    case PANNEL2__:
-                                        A_PlaySound(DUKE_WALKINDUCTS, pPlayer->i);
-                                        pPlayer->walking_snd_toggle = 1;
-                                        break;
-                                }
-                            }
-                            break;
-
-                            case ST_1_ABOVE_WATER:
-                                if (!pPlayer->spritebridge)
-                                {
-                                    if ((krand() & 1) == 0)
-                                        A_PlaySound(DUKE_ONWATER, pPlayer->i);
-                                    pPlayer->walking_snd_toggle = 1;
-                                }
-                                break;
-                        }
-                    }
-                }
-                else if (pPlayer->walking_snd_toggle > 0)
-                    pPlayer->walking_snd_toggle--;
-            }
-
-            if (pPlayer->jetpack_on == 0 && pPlayer->inv_amount[GET_STEROIDS] > 0 && pPlayer->inv_amount[GET_STEROIDS] < 400)
-                velocityModifier <<= 1;
-        }
-#endif
-
-        pPlayer->vel.x += (((pInput.fvel) * velocityModifier) << 6);
-        pPlayer->vel.y += (((pInput.svel) * velocityModifier) << 6);
-
-        int playerSpeedReduction = 0;
-
-        if (sectorLotag == ST_2_UNDERWATER)
-            playerSpeedReduction = pPlayer->swimspeedmodifier;
-        else if (((pPlayer->on_ground && TEST_SYNC_KEY(playerBits, SK_CROUCH))
-                  || (*weaponFrame > 10 && PWEAPON(playerNum, pPlayer->curr_weapon, WorksLike) == KNEE_WEAPON)))
-            playerSpeedReduction = pPlayer->crouchspeedmodifier;
-        else if (pPlayer->on_ground && !pPlayer->jumping_toggle && !TEST_SYNC_KEY(playerBits, SK_CROUCH)
-                 && !playerShrunk && (klabs(pPlayer->truefz - pPlayer->truecz) - (PMINHEIGHT << 1)) < stepHeight)
-        {
-            playerSpeedReduction = pPlayer->crouchspeedmodifier;
-//            pPlayer->pos.z += PCROUCHINCREMENT;
-        }
-
-        pPlayer->vel.x = mulscale16(pPlayer->vel.x, pPlayer->runspeed - playerSpeedReduction);
-        pPlayer->vel.y = mulscale16(pPlayer->vel.y, pPlayer->runspeed - playerSpeedReduction);
-
-        if (klabs(pPlayer->vel.x) < 2048 && klabs(pPlayer->vel.y) < 2048)
-            pPlayer->vel.x = pPlayer->vel.y = 0;
-
-#ifndef EDUKE32_STANDALONE
-        if (!FURY && playerShrunk)
-        {
-            pPlayer->vel.x = mulscale16(pPlayer->vel.x, pPlayer->runspeed - (pPlayer->runspeed >> 1) + (pPlayer->runspeed >> 2));
-            pPlayer->vel.y = mulscale16(pPlayer->vel.y, pPlayer->runspeed - (pPlayer->runspeed >> 1) + (pPlayer->runspeed >> 2));
-        }
-#endif
-    }
-
-    // This makes the player view lower when shrunk. This needs to happen before clipmove().
-    // Why? Because stupid fucking Duke3D puts the player sprite entirely into the floor.
-#ifndef EDUKE32_STANDALONE
-    if (!FURY && playerShrunk && pPlayer->jetpack_on == 0 && sectorLotag != ST_2_UNDERWATER && sectorLotag != ST_1_ABOVE_WATER)
-        pPlayer->pos.z += ZOFFSET5 - (sprite[pPlayer->i].yrepeat<<8);
-#endif
-HORIZONLY:;
-    if (ud.noclip)
-    {
-        pPlayer->pos.x += pPlayer->vel.x >> 14;
-        pPlayer->pos.y += pPlayer->vel.y >> 14;
-        updatesector(pPlayer->pos.x, pPlayer->pos.y, &pPlayer->cursectnum);
-        changespritesect(pPlayer->i, pPlayer->cursectnum);
-    }
-    else
-    {
-#ifdef YAX_ENABLE
-        int const playerSectNum = pPlayer->cursectnum;
-        int16_t   ceilingBunch, floorBunch;
-
-        if (playerSectNum >= 0)
-            yax_getbunches(playerSectNum, &ceilingBunch, &floorBunch);
-
-        // This updatesectorz conflicts with Duke3D's way of teleporting through water,
-        // so make it a bit conditional... OTOH, this way we have an ugly z jump when
-        // changing from above water to underwater
-
-        if ((playerSectNum >= 0 && !(sector[playerSectNum].lotag == ST_1_ABOVE_WATER && pPlayer->on_ground && floorBunch >= 0))
-            && ((floorBunch >= 0 && !(sector[playerSectNum].floorstat & 512))
-                || (ceilingBunch >= 0 && !(sector[playerSectNum].ceilingstat & 512))))
-        {
-            pPlayer->cursectnum += MAXSECTORS;  // skip initial z check, restored by updatesectorz
-            updatesectorz(pPlayer->pos.x, pPlayer->pos.y, pPlayer->pos.z, &pPlayer->cursectnum);
-        }
-#endif
-
-        P_ClampZ(pPlayer, sectorLotag, ceilZ, floorZ);
-
-        int const touchObject = FURY ? clipmove(&pPlayer->pos, &pPlayer->cursectnum, pPlayer->vel.x + (pPlayer->fric.x << 9),
-                                                   pPlayer->vel.y + (pPlayer->fric.y << 9), pPlayer->clipdist, (4L << 8), stepHeight, CLIPMASK0)
-                                        : clipmove(&pPlayer->pos, &pPlayer->cursectnum, pPlayer->vel.x, pPlayer->vel.y, pPlayer->clipdist,
-                                                   (4L << 8), stepHeight, CLIPMASK0);
-
-        if (touchObject)
-            P_CheckTouchDamage(pPlayer, touchObject);
-
-        if (FURY)
-            pPlayer->fric.x = pPlayer->fric.y = 0;
-    }
-
-    if (pPlayer->jetpack_on == 0)
-    {
-        if (pSprite->xvel > 16)
-        {
-            if (sectorLotag != ST_1_ABOVE_WATER && sectorLotag != ST_2_UNDERWATER && pPlayer->on_ground)
-            {
-                pPlayer->pycount += 52;
-                pPlayer->pycount &= 2047;
-                pPlayer->pyoff = klabs(pSprite->xvel * sintable[pPlayer->pycount]) / 1536;
-            }
-        }
-        else if (sectorLotag != ST_2_UNDERWATER && sectorLotag != ST_1_ABOVE_WATER)
-            pPlayer->pyoff = 0;
-
-        if (sectorLotag != ST_2_UNDERWATER)
-            pPlayer->pos.z += pPlayer->vel.z;
-    }
-
-    P_ClampZ(pPlayer, sectorLotag, ceilZ, floorZ);
-
-    if (pPlayer->cursectnum >= 0)
-    {
-        pPlayer->pos.z += pPlayer->spritezoffset;
-        sprite[pPlayer->i].xyz = pPlayer->pos;
-        pPlayer->pos.z -= pPlayer->spritezoffset;
-
-        changespritesect(pPlayer->i, pPlayer->cursectnum);
-    }
-
-    // ST_2_UNDERWATER
-    if (pPlayer->cursectnum >= 0 && sectorLotag < 3)
-    {
-        auto const pSector = (usectorptr_t)&sector[pPlayer->cursectnum];
-
-        // TRAIN_SECTOR_TO_SE_INDEX
-        if ((!ud.noclip && pSector->lotag == ST_31_TWO_WAY_TRAIN) &&
-            ((unsigned)pSector->hitag < MAXSPRITES && sprite[pSector->hitag].xvel && actor[pSector->hitag].t_data[0] == 0))
-        {
-            P_QuickKill(pPlayer);
-            return;
-        }
-    }
-
-#ifndef EDUKE32_STANDALONE
-    if (!FURY && (pPlayer->cursectnum >= 0 && trueFloorDist < pPlayer->spritezoffset && pPlayer->on_ground && sectorLotag != ST_1_ABOVE_WATER &&
-         playerShrunk == 0 && sector[pPlayer->cursectnum].lotag == ST_1_ABOVE_WATER) && (!A_CheckSoundPlaying(pPlayer->i, DUKE_ONWATER)))
-            A_PlaySound(DUKE_ONWATER, pPlayer->i);
-#endif
-
-    pPlayer->on_warping_sector = 0;
-
-    bool mashedPotato = false;
-
-    if (pPlayer->cursectnum >= 0 && ud.noclip == 0)
-    {
-RECHECK:
-        int const  pushResult = pushmove(&pPlayer->pos, &pPlayer->cursectnum, pPlayer->clipdist - 1, (4L<<8), (4L<<8), CLIPMASK0, !mashedPotato);
-        bool const squishPlayer = pushResult < 0;
-
-        if (squishPlayer || klabs(actor[pPlayer->i].floorz-actor[pPlayer->i].ceilingz) < pPlayer->spritezoffset + ZOFFSET3)
-        {
-            if (!(sector[pSprite->sectnum].lotag & 0x8000u) &&
-                (isanunderoperator(sector[pSprite->sectnum].lotag) || isanearoperator(sector[pSprite->sectnum].lotag)))
-                G_ActivateBySector(pSprite->sectnum, pPlayer->i);
-
-            if (squishPlayer)
-            {
-                if (mashedPotato)
-                {
-                    P_DoQuote(QUOTE_SQUISHED, pPlayer);
-                    P_QuickKill(pPlayer);
+                    RESET(pp->Flags, PF_CRAWLING);
+                    DoPlayerBeginRun(pp);
                     return;
                 }
-
-                mashedPotato = true;
-                pPlayer->pos = pPlayer->opos = backupPos;
-                goto RECHECK;
             }
         }
-        else if (klabs(floorZ - ceilZ) < ZOFFSET5 && isanunderoperator(sector[pPlayer->cursectnum].lotag))
-            G_ActivateBySector(pPlayer->cursectnum, pPlayer->i);
-    }
-
-    if (pPlayer->return_to_center > 0)
-        pPlayer->return_to_center--;
-
-    if (TEST_SYNC_KEY(playerBits, SK_CENTER_VIEW) || pPlayer->hard_landing)
-        if (VM_OnEvent(EVENT_RETURNTOCENTER, pPlayer->i,playerNum) == 0)
-            pPlayer->return_to_center = 9;
-
-    if (TEST_SYNC_KEY(playerBits, SK_LOOK_UP))
-    {
-        if (VM_OnEvent(EVENT_LOOKUP,pPlayer->i,playerNum) == 0)
+        else
         {
-            pPlayer->return_to_center = 9;
-            thisPlayer.horizRecenter = true;
-            thisPlayer.horizAngleAdjust = 12<<(int)(TEST_SYNC_KEY(playerBits, SK_RUN));
+            FLAG_KEY_RESET(pp, SK_CRAWL_LOCK);
         }
-    }
 
-    if (TEST_SYNC_KEY(playerBits, SK_LOOK_DOWN))
-    {
-        if (VM_OnEvent(EVENT_LOOKDOWN,pPlayer->i,playerNum) == 0)
+        // Jump to get up
+        if (TEST_SYNC_KEY(pp, SK_JUMP))
         {
-            pPlayer->return_to_center = 9;
-            thisPlayer.horizRecenter = true;
-            thisPlayer.horizAngleAdjust = -(12<<(int)(TEST_SYNC_KEY(playerBits, SK_RUN)));
-        }
-    }
-
-    if (TEST_SYNC_KEY(playerBits, SK_AIM_UP))
-    {
-        if (VM_OnEvent(EVENT_AIMUP,pPlayer->i,playerNum) == 0)
-        {
-            thisPlayer.horizAngleAdjust = 6 << (int)(TEST_SYNC_KEY(playerBits, SK_RUN));
-            thisPlayer.horizRecenter    = false;
-            pPlayer->return_to_center   = 0;
-        }
-    }
-
-    if (TEST_SYNC_KEY(playerBits, SK_AIM_DOWN))
-    {
-        if (VM_OnEvent(EVENT_AIMDOWN,pPlayer->i,playerNum) == 0)
-        {
-            thisPlayer.horizAngleAdjust = -(6 << (int)(TEST_SYNC_KEY(playerBits, SK_RUN)));
-            thisPlayer.horizRecenter    = false;
-            pPlayer->return_to_center   = 0;
-        }
-    }
-
-    if (pPlayer->hard_landing > 0)
-    {
-        thisPlayer.horizSkew = -(pPlayer->hard_landing << 4);
-        pPlayer->hard_landing--;
-    }
-
-    //Shooting code/changes
-
-    if (pPlayer->show_empty_weapon > 0)
-    {
-        --pPlayer->show_empty_weapon;
-
-        if (pPlayer->show_empty_weapon == 0 && (pPlayer->weaponswitch & 2) && pPlayer->ammo_amount[pPlayer->curr_weapon] <= 0)
-        {
-#ifndef EDUKE32_STANDALONE
-            if (!FURY)
+            if (labs(pp->loz - pp->hiz) >= PLAYER_STANDING_ROOM)
             {
-                if (pPlayer->last_full_weapon == GROW_WEAPON)
-                    pPlayer->subweapon |= (1 << GROW_WEAPON);
-                else if (pPlayer->last_full_weapon == SHRINKER_WEAPON)
-                    pPlayer->subweapon &= ~(1 << GROW_WEAPON);
+                //pp->posz = pp->loz - PLAYER_HEIGHT;
+
+                RESET(pp->Flags, PF_CRAWLING);
+                DoPlayerBeginRun(pp);
+                return;
             }
+        }
+
+    }
+    else
+    {
+        // Let off of crawl to get up
+        if (!TEST_SYNC_KEY(pp, SK_CRAWL))
+        {
+            if (labs(pp->loz - pp->hiz) >= PLAYER_STANDING_ROOM)
+            {
+                RESET(pp->Flags, PF_CRAWLING);
+                DoPlayerBeginRun(pp);
+                return;
+            }
+        }
+    }
+
+    if (pp->lo_sectp && TEST(pp->lo_sectp->extra, SECTFX_CURRENT))
+    {
+        DoPlayerCurrent(pp);
+    }
+
+    // Move around
+    DoPlayerMove(pp);
+
+    if (pp->WadeDepth > PLAYER_CRAWL_WADE_DEPTH)
+    {
+        RESET(pp->Flags, PF_CRAWLING);
+        DoPlayerBeginRun(pp);
+        return;
+    }
+
+    if (!TEST(pp->Flags, PF_PLAYER_MOVED))
+    {
+        NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Crawl);
+    }
+
+    // If the floor is far below you, fall hard instead of adjusting height
+    //if (labs(pp->posz - pp->loz) > PLAYER_CRAWL_HEIGHT + PLAYER_FALL_HEIGHT)
+    if (PlayerFallTest(pp, PLAYER_CRAWL_HEIGHT))
+    {
+        pp->jump_speed = Z(1);
+        //pp->posz -= PLAYER_HEIGHT - PLAYER_CRAWL_HEIGHT;
+        RESET(pp->Flags, PF_CRAWLING);
+        DoPlayerBeginFall(pp);
+        // call PlayerFall now seems to iron out a hitch before falling
+        DoPlayerFall(pp);
+        return;
+    }
+
+    if (pp->cursectnum >= 0 && TEST(sector[pp->cursectnum].extra, SECTFX_DYNAMIC_AREA))
+    {
+        pp->posz = pp->loz - PLAYER_CRAWL_HEIGHT;
+    }
+
+    DoPlayerBob(pp);
+    DoPlayerCrawlHeight(pp);
+}
+
+void
+DoPlayerBeginFly(PLAYERp pp)
+{
+//    USERp u = User[pp->PlayerSprite];
+
+    RESET(pp->Flags, PF_FALLING | PF_JUMPING | PF_CRAWLING);
+    SET(pp->Flags, PF_FLYING);
+    SET(pp->Flags2, PF2_INPUT_CAN_TURN|PF2_INPUT_CAN_AIM);
+
+    pp->friction = PLAYER_FLY_FRICTION;
+    pp->floor_dist = PLAYER_RUN_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_RUN_CEILING_DIST;
+    pp->DoPlayerAction = DoPlayerFly;
+
+    pp->z_speed = -Z(10);
+    pp->jump_speed = 0;
+    pp->bob_amt = 0;
+    pp->bob_ndx = 1024;
+
+    ///DamageData[u->WeaponNum].Init(pp);
+
+    NewStateGroup(pp->PlayerSprite, sg_PlayerNinjaFly);
+}
+
+int GetSinNdx(int range, int bob_amt)
+{
+    int amt;
+
+    amt = Z(512) / range;
+
+    return bob_amt * amt;
+}
+
+void PlayerWarpUpdatePos(PLAYERp pp)
+{
+    if (Prediction)
+        return;
+
+    pp->oposx = pp->posx;
+    pp->oposy = pp->posy;
+    pp->oposz = pp->posz;
+    DoPlayerZrange(pp);
+    UpdatePlayerSprite(pp);
+}
+
+SWBOOL PlayerCeilingHit(PLAYERp pp, int zlimit)
+{
+    if (pp->posz < zlimit)
+    {
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+SWBOOL PlayerFloorHit(PLAYERp pp, int zlimit)
+{
+    if (pp->posz > zlimit)
+    {
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+void
+DoPlayerFly(PLAYERp pp)
+{
+    if (pp->cursectnum >= 0 && SectorIsUnderwaterArea(pp->cursectnum))
+    {
+        DoPlayerBeginDiveNoWarp(pp);
+        return;
+    }
+
+    if (TEST_SYNC_KEY(pp, SK_CRAWL))
+    {
+        pp->z_speed += PLAYER_FLY_INC;
+
+        if (pp->z_speed > PLAYER_FLY_MAX_SPEED)
+            pp->z_speed = PLAYER_FLY_MAX_SPEED;
+    }
+
+    if (TEST_SYNC_KEY(pp, SK_JUMP))
+    {
+        pp->z_speed -= PLAYER_FLY_INC;
+
+        if (pp->z_speed < -PLAYER_FLY_MAX_SPEED)
+            pp->z_speed = -PLAYER_FLY_MAX_SPEED;
+    }
+
+    pp->z_speed = mulscale16(pp->z_speed, 58000);
+
+    pp->posz += pp->z_speed;
+
+    // Make the min distance from the ceiling/floor match bobbing amount
+    // so the player never goes into the ceiling/floor
+
+    // Only get so close to the ceiling
+    if (PlayerCeilingHit(pp, pp->hiz + PLAYER_FLY_BOB_AMT + Z(8)))
+    {
+        pp->posz = pp->hiz + PLAYER_FLY_BOB_AMT + Z(8);
+        pp->z_speed = 0;
+    }
+
+    // Only get so close to the floor
+    if (PlayerFloorHit(pp, pp->loz - PLAYER_HEIGHT - PLAYER_FLY_BOB_AMT))
+    {
+        pp->posz = pp->loz - PLAYER_HEIGHT - PLAYER_FLY_BOB_AMT;
+        pp->z_speed = 0;
+    }
+
+    if (PlayerFlyKey())
+    {
+        RESET(pp->Flags, PF_FLYING);
+        pp->bob_amt = 0;
+        pp->bob_ndx = 0;
+        DoPlayerBeginFall(pp);
+        DoPlayerFall(pp);
+        return;
+    }
+
+    DoPlayerMove(pp);
+}
+
+
+SPRITEp
+FindNearSprite(SPRITEp sp, short stat)
+{
+    short fs, next_fs;
+    int dist, near_dist = 15000;
+    SPRITEp fp, near_fp = NULL;
+
+
+    TRAVERSE_SPRITE_STAT(headspritestat[stat], fs, next_fs)
+    {
+        fp = &sprite[fs];
+
+        dist = Distance(sp->x, sp->y, fp->x, fp->y);
+
+        if (dist < near_dist)
+        {
+            near_dist = dist;
+            near_fp = fp;
+        }
+    }
+
+    return near_fp;
+}
+
+SWBOOL
+PlayerOnLadder(PLAYERp pp)
+{
+    short sec, wal, spr;
+    int dist, nx, ny;
+    unsigned i;
+    SPRITEp lsp;
+    hitdata_t hitinfo;
+    int dir;
+
+    int neartaghitdist;
+    short neartagsector, neartagwall, neartagsprite;
+
+    static short angles[] =
+    {
+        30, -30
+    };
+
+    if (Prediction)
+        return 0;
+
+    neartag(pp->posx, pp->posy, pp->posz, pp->cursectnum, fix16_to_int(pp->q16ang),
+            &neartagsector, &neartagwall, &neartagsprite,
+            &neartaghitdist, 1024L+768L, NTAG_SEARCH_LO_HI, NULL);
+
+    dir = DOT_PRODUCT_2D(pp->xvect, pp->yvect, sintable[NORM_ANGLE(fix16_to_int(pp->q16ang) + 512)], sintable[NORM_ANGLE(fix16_to_int(pp->q16ang))]);
+
+    if (dir < 0)
+        return FALSE;
+
+    if (neartagwall < 0 || wall[neartagwall].lotag != TAG_WALL_CLIMB)
+        return FALSE;
+
+    for (i = 0; i < SIZ(angles); i++)
+    {
+        neartag(pp->posx, pp->posy, pp->posz, pp->cursectnum, NORM_ANGLE(fix16_to_int(pp->q16ang) + angles[i]),
+                &sec, &wal, &spr,
+                &dist, 600L, NTAG_SEARCH_LO_HI, NULL);
+
+        if (wal < 0 || dist < 100 || wall[wal].lotag != TAG_WALL_CLIMB)
+            return FALSE;
+
+        FAFhitscan(pp->posx, pp->posy, pp->posz, pp->cursectnum,
+                   sintable[NORM_ANGLE(fix16_to_int(pp->q16ang)  + angles[i] + 512)],
+                   sintable[NORM_ANGLE(fix16_to_int(pp->q16ang) + angles[i])],
+                   0,
+                   &hitinfo, CLIPMASK_MISSILE);
+
+        dist = DIST(pp->posx, pp->posy, hitinfo.x, hitinfo.y);
+
+        if (hitinfo.sprite >= 0)
+        {
+            // if the sprite blocking you hit is not a wall sprite there is something between
+            // you and the ladder
+            if (TEST(sprite[hitinfo.sprite].cstat, CSTAT_SPRITE_BLOCK) &&
+                !TEST(sprite[hitinfo.sprite].cstat, CSTAT_SPRITE_ALIGNMENT_WALL))
+            {
+                return FALSE;
+            }
+        }
+        else
+        {
+            // if you hit a wall and it is not a climb wall - forget it
+            if (hitinfo.wall >= 0 && wall[hitinfo.wall].lotag != TAG_WALL_CLIMB)
+                return FALSE;
+        }
+    }
+
+
+    lsp = FindNearSprite(pp->SpriteP, STAT_CLIMB_MARKER);
+
+    if (!lsp)
+        return FALSE;
+
+    // determine where the player is supposed to be in relation to the ladder
+    // move out in front of the ladder
+    nx = MOVEx(100, lsp->ang);
+    ny = MOVEy(100, lsp->ang);
+
+    // set angle player is supposed to face.
+    pp->LadderAngle = NORM_ANGLE(lsp->ang + 1024);
+
+#if DEBUG
+    if (wall[wal].nextsector < 0)
+    {
+        TerminateGame();
+        printf("Take out white wall ladder x = %d, y = %d",wall[wal].x, wall[wal].y);
+        exit(0);
+    }
 #endif
-            P_AddWeapon(pPlayer, pPlayer->last_full_weapon, 1);
+
+    pp->LadderSector = wall[wal].nextsector;
+    //DSPRINTF(ds, "Ladder Sector %d", pp->LadderSector);
+    MONO_PRINT(ds);
+
+    // set players "view" distance from the ladder - needs to be farther than
+    // the sprite
+
+    pp->lx = lsp->x + nx * 5;
+    pp->ly = lsp->y + ny * 5;
+
+    pp->camq16ang = pp->q16ang = fix16_from_int(pp->LadderAngle);
+
+    return TRUE;
+}
+
+SWBOOL DoPlayerTestCrawl(PLAYERp pp)
+{
+    if (labs(pp->loz - pp->hiz) < PLAYER_STANDING_ROOM)
+        return TRUE;
+
+    return FALSE;
+}
+
+int
+PlayerInDiveArea(PLAYERp pp)
+{
+    SECTORp sectp;
+
+    if (pp->lo_sectp)
+    {
+        //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        //Attention: This changed on 07/29/97
+        //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        sectp = &sector[pp->cursectnum];
+        //sectp = pp->lo_sectp;
+    }
+    else
+        return FALSE;
+
+    if (TEST(sectp->extra, SECTFX_DIVE_AREA))
+    {
+        CheckFootPrints(pp);
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+int
+PlayerCanDive(PLAYERp pp)
+{
+    if (Prediction)
+        return FALSE;
+
+    // Crawl - check for diving
+    if (TEST_SYNC_KEY(pp, SK_CRAWL) || pp->jump_speed > 0)
+    {
+        if (PlayerInDiveArea(pp))
+        {
+            pp->posz += Z(20);
+            pp->z_speed = Z(20);
+            pp->jump_speed = 0;
+
+            if (pp->posz > pp->loz - Z(pp->WadeDepth) - Z(2))
+            {
+                DoPlayerBeginDive(pp);
+            }
+
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+int
+PlayerCanDiveNoWarp(PLAYERp pp)
+{
+    if (Prediction)
+        return FALSE;
+
+    // check for diving
+    if (pp->jump_speed > 1400)
+    {
+        if (FAF_ConnectArea(pp->cursectnum))
+        {
+            short sectnum = pp->cursectnum;
+
+            updatesectorz(pp->posx, pp->posy, SPRITEp_BOS(pp->SpriteP), &sectnum);
+
+            if (sectnum >= 0 && SectorIsUnderwaterArea(sectnum))
+            {
+                pp->cursectnum = sectnum;
+                pp->posz = sector[sectnum].ceilingz;
+
+                pp->posz += Z(20);
+                pp->z_speed = Z(20);
+                pp->jump_speed = 0;
+
+                PlaySound(DIGI_SPLASH1, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan);
+                DoPlayerBeginDiveNoWarp(pp);
+                return TRUE;
+            }
+        }
+    }
+
+    return FALSE;
+}
+
+
+int
+GetOverlapSector(int x, int y, short *over, short *under)
+{
+    int i, found = 0;
+    short sf[2]= {0,0};                       // sectors found
+
+    if ((SectUser[*under] && SectUser[*under]->number >= 30000) || (SectUser[*over] && SectUser[*over]->number >= 30000))
+        return GetOverlapSector2(x,y,over,under);
+
+    // instead of check ALL sectors, just check the two most likely first
+    if (inside(x, y, *over))
+    {
+        sf[found] = *over;
+        found++;
+    }
+
+    if (inside(x, y, *under))
+    {
+        sf[found] = *under;
+        found++;
+    }
+
+    // if nothing was found, check them all
+    if (found == 0)
+    {
+        for (found = 0, i = 0; i < numsectors; i++)
+        {
+            if (inside(x, y, i))
+            {
+                sf[found] = i;
+                found++;
+                PRODUCTION_ASSERT(found <= 2);
+            }
+        }
+    }
+
+    if (!found)
+    {
+        TerminateGame();
+        printf("GetOverlapSector x = %d, y = %d, over %d, under %d", x, y, *over, *under);
+        exit(0);
+    }
+
+    PRODUCTION_ASSERT(found != 0);
+    PRODUCTION_ASSERT(found <= 2);
+
+    // the are overlaping - check the z coord
+    if (found == 2)
+    {
+        if (sector[sf[0]].floorz > sector[sf[1]].floorz)
+        {
+            *under = sf[0];
+            *over = sf[1];
+        }
+        else
+        {
+            *under = sf[1];
+            *over = sf[0];
+        }
+    }
+    else
+    // the are NOT overlaping
+    {
+        *over = sf[0];
+        *under = -1;
+    }
+
+    return found;
+}
+
+int
+GetOverlapSector2(int x, int y, short *over, short *under)
+{
+    int i, nexti, found = 0;
+    short sf[2]= {0,0};                       // sectors found
+
+    unsigned stat;
+    static short UnderStatList[] = {STAT_UNDERWATER, STAT_UNDERWATER2};
+
+    // NOTE: For certain heavily overlapped areas in $seabase this is a better
+    // method.
+
+    // instead of check ALL sectors, just check the two most likely first
+    if (inside(x, y, *over))
+    {
+        sf[found] = *over;
+        found++;
+    }
+
+    if (inside(x, y, *under))
+    {
+        sf[found] = *under;
+        found++;
+    }
+
+    // if nothing was found, check them all
+    if (found == 0)
+    {
+        TRAVERSE_SPRITE_STAT(headspritestat[STAT_DIVE_AREA],i,nexti)
+        {
+            if (inside(x, y, sprite[i].sectnum))
+            {
+                sf[found] = sprite[i].sectnum;
+                found++;
+                PRODUCTION_ASSERT(found <= 2);
+            }
+        }
+
+        for (stat = 0; stat < SIZ(UnderStatList); stat++)
+        {
+            TRAVERSE_SPRITE_STAT(headspritestat[UnderStatList[stat]],i,nexti)
+            {
+                // ignore underwater areas with lotag of 0
+                if (sprite[i].lotag == 0)
+                    continue;
+
+                if (inside(x, y, sprite[i].sectnum))
+                {
+                    sf[found] = sprite[i].sectnum;
+                    found++;
+                    PRODUCTION_ASSERT(found <= 2);
+                }
+            }
+        }
+    }
+
+    if (!found)
+    {
+        TerminateGame();
+        printf("GetOverlapSector x = %d, y = %d, over %d, under %d", x, y, *over, *under);
+        exit(0);
+    }
+
+    PRODUCTION_ASSERT(found != 0);
+    PRODUCTION_ASSERT(found <= 2);
+
+    // the are overlaping - check the z coord
+    if (found == 2)
+    {
+        if (sector[sf[0]].floorz > sector[sf[1]].floorz)
+        {
+            *under = sf[0];
+            *over = sf[1];
+        }
+        else
+        {
+            *under = sf[1];
+            *over = sf[0];
+        }
+    }
+    else
+    // the are NOT overlaping
+    {
+        *over = sf[0];
+        *under = -1;
+    }
+
+    return found;
+}
+
+
+void
+DoPlayerWarpToUnderwater(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+    short i, nexti;
+    SECT_USERp sectu = SectUser[pp->cursectnum];
+    SPRITEp under_sp = NULL, over_sp = NULL;
+    char Found = FALSE;
+    short over, under;
+
+    if (Prediction)
+        return;
+
+
+    // search for DIVE_AREA "over" sprite for reference point
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_DIVE_AREA], i, nexti)
+    {
+        over_sp = &sprite[i];
+
+        if (TEST(sector[over_sp->sectnum].extra, SECTFX_DIVE_AREA) &&
+            SectUser[over_sp->sectnum] &&
+            SectUser[over_sp->sectnum]->number == sectu->number)
+        {
+            Found = TRUE;
+            break;
+        }
+    }
+
+    PRODUCTION_ASSERT(Found == TRUE);
+    Found = FALSE;
+
+    // search for UNDERWATER "under" sprite for reference point
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_UNDERWATER], i, nexti)
+    {
+        under_sp = &sprite[i];
+
+        if (TEST(sector[under_sp->sectnum].extra, SECTFX_UNDERWATER) &&
+            SectUser[under_sp->sectnum] &&
+            SectUser[under_sp->sectnum]->number == sectu->number)
+        {
+            Found = TRUE;
+            break;
+        }
+    }
+
+    PRODUCTION_ASSERT(Found == TRUE);
+
+    // get the offset from the sprite
+    u->sx = over_sp->x - pp->posx;
+    u->sy = over_sp->y - pp->posy;
+
+    // update to the new x y position
+    pp->posx = under_sp->x - u->sx;
+    pp->posy = under_sp->y - u->sy;
+
+    over  = over_sp->sectnum;
+    under = under_sp->sectnum;
+
+    if (GetOverlapSector(pp->posx, pp->posy, &over, &under) == 2)
+    {
+        pp->cursectnum = under;
+    }
+    else
+        pp->cursectnum = over;
+
+    pp->posz = sector[under_sp->sectnum].ceilingz + Z(6);
+
+    pp->oposx = pp->posx;
+    pp->oposy = pp->posy;
+    pp->oposz = pp->posz;
+
+    DoPlayerZrange(pp);
+    return;
+}
+
+void
+DoPlayerWarpToSurface(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+    short i, nexti;
+    SECT_USERp sectu = SectUser[pp->cursectnum];
+    short over, under;
+
+    SPRITEp under_sp = NULL, over_sp = NULL;
+    char Found = FALSE;
+
+    if (Prediction)
+        return;
+
+    // search for UNDERWATER "under" sprite for reference point
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_UNDERWATER], i, nexti)
+    {
+        under_sp = &sprite[i];
+
+        if (TEST(sector[under_sp->sectnum].extra, SECTFX_UNDERWATER) &&
+            SectUser[under_sp->sectnum] &&
+            SectUser[under_sp->sectnum]->number == sectu->number)
+        {
+            Found = TRUE;
+            break;
+        }
+    }
+
+    PRODUCTION_ASSERT(Found == TRUE);
+    Found = FALSE;
+
+    // search for DIVE_AREA "over" sprite for reference point
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_DIVE_AREA], i, nexti)
+    {
+        over_sp = &sprite[i];
+
+        if (TEST(sector[over_sp->sectnum].extra, SECTFX_DIVE_AREA) &&
+            SectUser[over_sp->sectnum] &&
+            SectUser[over_sp->sectnum]->number == sectu->number)
+        {
+            Found = TRUE;
+            break;
+        }
+    }
+
+    PRODUCTION_ASSERT(Found == TRUE);
+
+    // get the offset from the under sprite
+    u->sx = under_sp->x - pp->posx;
+    u->sy = under_sp->y - pp->posy;
+
+    // update to the new x y position
+    pp->posx = over_sp->x - u->sx;
+    pp->posy = over_sp->y - u->sy;
+
+    over = over_sp->sectnum;
+    under = under_sp->sectnum;
+
+    if (GetOverlapSector(pp->posx, pp->posy, &over, &under))
+    {
+        pp->cursectnum = over;
+    }
+
+    pp->posz = sector[over_sp->sectnum].floorz - Z(2);
+
+    // set z range and wade depth so we know how high to set view
+    DoPlayerZrange(pp);
+    DoPlayerSetWadeDepth(pp);
+
+    pp->posz -= Z(pp->WadeDepth);
+
+    pp->oposx = pp->posx;
+    pp->oposy = pp->posy;
+    pp->oposz = pp->posz;
+
+    return;
+}
+
+
+#if 1
+void
+DoPlayerDivePalette(PLAYERp pp)
+{
+    if (pp != Player + screenpeek) return;
+
+    if ((pp->DeathType == PLAYER_DEATH_DROWN || TEST((Player+screenpeek)->Flags, PF_DIVING)) && !TEST(pp->Flags, PF_DIVING_IN_LAVA))
+    {
+        SetFadeAmt(pp,-1005,210); // Dive color , org color 208
+    }
+    else
+    {
+        // Put it all back to normal
+        if (pp->StartColor == 210)
+        {
+            memcpy(pp->temp_pal, palette_data, sizeof(palette_data));
+            memcpy(palookup[PALETTE_DEFAULT], DefaultPalette, 256 * 32);
+            if (videoGetRenderMode() < REND_POLYMOST)
+                COVERsetbrightness(gs.Brightness, &palette_data[0][0]);
+            else
+                videoFadePalette(0,0,0,0);
+            pp->FadeAmt = 0;
+        }
+    }
+}
+#endif
+
+
+void
+DoPlayerBeginDive(PLAYERp pp)
+{
+    SPRITEp sp = &sprite[pp->PlayerSprite];
+    USERp u = User[pp->PlayerSprite];
+
+    if (Prediction)
+        return;
+
+    if (pp->Bloody) pp->Bloody = FALSE; // Water washes away the blood
+
+    SET(pp->Flags, PF_DIVING);
+    SET(pp->Flags2, PF2_INPUT_CAN_TURN|PF2_INPUT_CAN_AIM);
+    DoPlayerDivePalette(pp);
+    DoPlayerNightVisionPalette(pp);
+
+    if (pp == Player + screenpeek)
+    {
+        COVER_SetReverb(140); // Underwater echo
+        pp->Reverb = 140;
+    }
+
+    SpawnSplash(pp->PlayerSprite);
+
+    DoPlayerWarpToUnderwater(pp);
+    OperateTripTrigger(pp);
+
+    RESET(pp->Flags, PF_JUMPING | PF_FALLING);
+    RESET(pp->Flags, PF_CRAWLING);
+    RESET(pp->Flags, PF_LOCK_CRAWL);
+
+    pp->friction = PLAYER_DIVE_FRICTION;
+    pp->ceiling_dist = PLAYER_DIVE_CEILING_DIST;
+    pp->floor_dist = PLAYER_DIVE_FLOOR_DIST;
+    SET(sp->cstat, CSTAT_SPRITE_YCENTER);
+    pp->DoPlayerAction = DoPlayerDive;
+
+    //pp->z_speed = 0;
+
+    pp->DiveTics = PLAYER_DIVE_TIME;
+    pp->DiveDamageTics = 0;
+
+    DoPlayerMove(pp); // needs to be called to reset the pp->loz/hiz variable
+    ///DamageData[u->WeaponNum].Init(pp);
+
+    NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Dive);
+
+    DoPlayerDive(pp);
+}
+
+void DoPlayerBeginDiveNoWarp(PLAYERp pp)
+{
+    SPRITEp sp = &sprite[pp->PlayerSprite];
+    USERp u = User[pp->PlayerSprite];
+
+    if (Prediction)
+        return;
+
+    if (pp->cursectnum < 0 || !SectorIsUnderwaterArea(pp->cursectnum))
+        return;
+
+    if (pp->Bloody) pp->Bloody = FALSE; // Water washes away the blood
+
+    if (pp == Player + screenpeek)
+    {
+        COVER_SetReverb(140); // Underwater echo
+        pp->Reverb = 140;
+    }
+
+    CheckFootPrints(pp);
+
+    if (TEST(pp->lo_sectp->extra, SECTFX_LIQUID_MASK) == SECTFX_LIQUID_LAVA)
+    {
+        SET(pp->Flags, PF_DIVING_IN_LAVA);
+        u->DamageTics = 0;
+    }
+
+    SET(pp->Flags, PF_DIVING);
+    SET(pp->Flags2, PF2_INPUT_CAN_TURN|PF2_INPUT_CAN_AIM);
+    DoPlayerDivePalette(pp);
+    DoPlayerNightVisionPalette(pp);
+
+    RESET(pp->Flags, PF_JUMPING | PF_FALLING);
+
+    pp->friction = PLAYER_DIVE_FRICTION;
+    pp->ceiling_dist = PLAYER_DIVE_CEILING_DIST;
+    pp->floor_dist = PLAYER_DIVE_FLOOR_DIST;
+    SET(sp->cstat, CSTAT_SPRITE_YCENTER);
+    pp->DoPlayerAction = DoPlayerDive;
+    pp->z_speed = 0;
+    pp->DiveTics = PLAYER_DIVE_TIME;
+    pp->DiveDamageTics = 0;
+    DoPlayerMove(pp); // needs to be called to reset the pp->loz/hiz variable
+    ///DamageData[u->WeaponNum].Init(pp);
+    NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Dive);
+    DoPlayerDive(pp);
+}
+
+void
+DoPlayerStopDiveNoWarp(PLAYERp pp)
+{
+    if (Prediction)
+        return;
+
+    if (!NoMeters) SetRedrawScreen(pp);
+
+    if (FX_SoundValidAndActive(pp->TalkVocHandle))
+    {
+        FX_StopSound(pp->TalkVocHandle);
+        pp->TalkVocHandle = 0;
+        pp->PlayerTalking = FALSE;
+    }
+
+    // stop diving no warp
+    PlayerSound(DIGI_SURFACE,&pp->posx,&pp->posy,&pp->posz,v3df_dontpan|v3df_follow|v3df_doppler,pp);
+
+    pp->bob_amt = 0;
+
+    RESET(pp->Flags, PF_DIVING|PF_DIVING_IN_LAVA);
+    DoPlayerDivePalette(pp);
+    DoPlayerNightVisionPalette(pp);
+    RESET(pp->SpriteP->cstat, CSTAT_SPRITE_YCENTER);
+    if (pp == Player + screenpeek)
+    {
+        COVER_SetReverb(0);
+        pp->Reverb = 0;
+    }
+
+    DoPlayerZrange(pp);
+}
+
+void
+DoPlayerStopDive(PLAYERp pp)
+{
+    SPRITEp sp = &sprite[pp->PlayerSprite];
+
+    if (Prediction)
+        return;
+
+    if (!NoMeters) SetRedrawScreen(pp);
+
+    if (FX_SoundValidAndActive(pp->TalkVocHandle))
+    {
+        FX_StopSound(pp->TalkVocHandle);
+        pp->TalkVocHandle = 0;
+        pp->PlayerTalking = FALSE;
+    }
+
+    // stop diving with warp
+    PlayerSound(DIGI_SURFACE,&pp->posx,&pp->posy,&pp->posz,v3df_dontpan|v3df_follow|v3df_doppler,pp);
+
+    pp->bob_amt = 0;
+    DoPlayerWarpToSurface(pp);
+    DoPlayerBeginWade(pp);
+    RESET(pp->Flags, PF_DIVING|PF_DIVING_IN_LAVA);
+
+    DoPlayerDivePalette(pp);
+    DoPlayerNightVisionPalette(pp);
+    RESET(sp->cstat, CSTAT_SPRITE_YCENTER);
+    if (pp == Player + screenpeek)
+    {
+        COVER_SetReverb(0);
+        pp->Reverb = 0;
+    }
+}
+
+void
+DoPlayerDiveMeter(PLAYERp pp)
+{
+    short color=0,metertics,meterunit;
+    int y;
+
+
+    if (NoMeters) return;
+
+    // Don't draw bar from other players
+    if (pp != Player+myconnectindex) return;
+
+    if (!TEST(pp->Flags, PF_DIVING|PF_DIVING_IN_LAVA)) return;
+
+    meterunit = PLAYER_DIVE_TIME / 30;
+    if (meterunit > 0)
+        metertics = pp->DiveTics / meterunit;
+    else
+        return;
+
+    if (metertics <= 0 && !TEST(pp->Flags, PF_DIVING|PF_DIVING_IN_LAVA))
+    {
+        SetRedrawScreen(pp);
+        return;
+    }
+
+    if (metertics <= 0) return;
+
+    if (numplayers < 2) y = 10;
+    else if (numplayers >=2 && numplayers <= 4) y = 20;
+    else
+        y = 30;
+
+    if (metertics <= 12 && metertics > 6)
+        color = 20;
+    else if (metertics <= 6)
+        color = 25;
+    else
+        color = 22;
+
+    rotatesprite((200+8)<<16,y<<16,65536L,0,5408,1,1,
+                 (ROTATE_SPRITE_SCREEN_CLIP),0,0,xdim-1,ydim-1);
+
+    rotatesprite((218+47)<<16,y<<16,65536L,0,5406-metertics,1,color,
+                 (ROTATE_SPRITE_SCREEN_CLIP),0,0,xdim-1,ydim-1);
+}
+
+void
+DoPlayerDive(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+    SECT_USERp sectu = SectUser[pp->cursectnum];
+
+    // whenever your view is not in a water area
+    if (pp->cursectnum < 0 || !SectorIsUnderwaterArea(pp->cursectnum))
+    {
+        DoPlayerStopDiveNoWarp(pp);
+        DoPlayerBeginRun(pp);
+        return;
+    }
+
+    if ((pp->DiveTics -= synctics) < 0)
+    {
+        if ((pp->DiveDamageTics -= synctics) < 0)
+        {
+            pp->DiveDamageTics = PLAYER_DIVE_DAMAGE_TIME;
+            //PlayerUpdateHealth(pp, PLAYER_DIVE_DAMAGE_AMOUNT);
+            PlayerSound(DIGI_WANGDROWNING, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan|v3df_follow, pp);
+            PlayerUpdateHealth(pp, -3 -(RANDOM_RANGE(7<<8)>>8));
+            PlayerCheckDeath(pp, -1);
+            if (TEST(pp->Flags, PF_DEAD))
+                return;
+        }
+    }
+
+    // underwater current
+    if (pp->lo_sectp && TEST(pp->lo_sectp->extra, SECTFX_CURRENT))
+    {
+        DoPlayerCurrent(pp);
+    }
+
+    // while diving in lava
+    // every DamageTics time take some damage
+    if (TEST(pp->Flags, PF_DIVING_IN_LAVA))
+    {
+        if ((u->DamageTics -= synctics) < 0)
+        {
+            u->DamageTics = 30;   // !JIM! Was DAMAGE_TIME
+
+            PlayerUpdateHealth(pp, -40);
+        }
+    }
+
+    if (TEST_SYNC_KEY(pp, SK_CRAWL))
+    {
+        pp->z_speed += PLAYER_DIVE_INC;
+
+        if (pp->z_speed > PLAYER_DIVE_MAX_SPEED)
+            pp->z_speed = PLAYER_DIVE_MAX_SPEED;
+    }
+
+    if (TEST_SYNC_KEY(pp, SK_JUMP))
+    {
+        pp->z_speed -= PLAYER_DIVE_INC;
+
+        if (pp->z_speed < -PLAYER_DIVE_MAX_SPEED)
+            pp->z_speed = -PLAYER_DIVE_MAX_SPEED;
+    }
+
+    pp->z_speed = mulscale16(pp->z_speed, 58000);
+
+    if (labs(pp->z_speed) < 16)
+        pp->z_speed = 0;
+
+    pp->posz += pp->z_speed;
+
+    if (pp->z_speed < 0 && FAF_ConnectArea(pp->cursectnum))
+    {
+        if (pp->posz < sector[pp->cursectnum].ceilingz + Z(10))
+        {
+            short sectnum = pp->cursectnum;
+
+            // check for sector above to see if it is an underwater sector also
+            updatesectorz(pp->posx, pp->posy, sector[pp->cursectnum].ceilingz - Z(8), &sectnum);
+
+            if (sectnum >= 0 && !SectorIsUnderwaterArea(sectnum))
+            {
+                // if not underwater sector we must surface
+                // force into above sector
+                pp->posz = sector[pp->cursectnum].ceilingz - Z(8);
+                pp->cursectnum = sectnum;
+                DoPlayerStopDiveNoWarp(pp);
+                DoPlayerBeginRun(pp);
+                return;
+            }
+        }
+    }
+
+
+    // Only get so close to the ceiling
+    // if its a dive sector without a match or a UNDER2 sector with CANT_SURFACE set
+    if (sectu && (sectu->number == 0 || TEST(sectu->flags, SECTFU_CANT_SURFACE)))
+    {
+        // for room over room water the hiz will be the top rooms ceiling
+        if (pp->posz < pp->hiz + pp->ceiling_dist)
+        {
+            pp->posz = pp->hiz + pp->ceiling_dist;
+        }
+    }
+    else
+    {
+        // close to a warping sector - stop diveing with a warp to surface
+        // !JIM! FRANK - I added !pp->hi_sp so that you don't warp to surface when
+        //     there is a sprite above you since getzrange returns a hiz < ceiling height
+        //     if you are clipping into a sprite and not the ceiling.
+        if (pp->posz < pp->hiz + Z(4) && !pp->hi_sp)
+        {
+            DoPlayerStopDive(pp);
             return;
         }
     }
 
-#ifndef EDUKE32_STANDALONE
-    if (!FURY && pPlayer->knee_incs > 0)
+    // Only get so close to the floor
+    if (pp->posz >= pp->loz - PLAYER_DIVE_HEIGHT)
     {
-        thisPlayer.horizSkew = -48;
-        thisPlayer.horizRecenter = true;
-        pPlayer->return_to_center = 9;
+        pp->posz = pp->loz - PLAYER_DIVE_HEIGHT;
+    }
 
-        if (++pPlayer->knee_incs > 15)
+    // make player bob if sitting still
+    if (!PLAYER_MOVING(pp) && pp->z_speed == 0 && pp->up_speed == 0)
+    {
+        DoPlayerSpriteBob(pp, PLAYER_DIVE_HEIGHT, PLAYER_DIVE_BOB_AMT, 3);
+    }
+    // player is moving
+    else
+    {
+        // if bob_amt is approx 0
+        if (labs(pp->bob_amt) < Z(1))
         {
-            pPlayer->knee_incs      = 0;
-            pPlayer->holster_weapon = 0;
-            pPlayer->weapon_pos     = klabs(pPlayer->weapon_pos);
+            pp->bob_amt = 0;
+            pp->bob_ndx = 0;
+        }
+        // else keep bobbing until its back close to 0
+        else
+        {
+            DoPlayerSpriteBob(pp, PLAYER_DIVE_HEIGHT, PLAYER_DIVE_BOB_AMT, 3);
+        }
+    }
 
-            if (pPlayer->actorsqu >= 0 && sprite[pPlayer->actorsqu].statnum != MAXSTATUS &&
-                dist(&sprite[pPlayer->i], &sprite[pPlayer->actorsqu]) < 1400)
+    // Reverse bobbing when getting close to the floor
+    if (pp->posz + pp->bob_amt >= pp->loz - PLAYER_DIVE_HEIGHT)
+    {
+        pp->bob_ndx = NORM_ANGLE(pp->bob_ndx + ((1024 + 512) - pp->bob_ndx) * 2);
+        DoPlayerSpriteBob(pp, PLAYER_DIVE_HEIGHT, PLAYER_DIVE_BOB_AMT, 3);
+    }
+    // Reverse bobbing when getting close to the ceiling
+    if (pp->posz + pp->bob_amt < pp->hiz + pp->ceiling_dist)
+    {
+        pp->bob_ndx = NORM_ANGLE(pp->bob_ndx + ((512) - pp->bob_ndx) * 2);
+        DoPlayerSpriteBob(pp, PLAYER_DIVE_HEIGHT, PLAYER_DIVE_BOB_AMT, 3);
+    }
+
+    DoPlayerMove(pp);
+
+    // Random bubble sounds
+    // if((RANDOM_RANGE(1000<<5)>>5) < 100)
+    //     PlaySound(DIGI_BUBBLES, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan|v3df_follow);
+
+    if ((!Prediction && pp->z_speed && ((RANDOM_P2(1024<<5)>>5) < 64)) ||
+        (PLAYER_MOVING(pp) && (RANDOM_P2(1024<<5)>>5) < 64))
+    {
+        short bubble;
+        SPRITEp bp;
+        int nx,ny;
+
+        PlaySound(DIGI_BUBBLES, &pp->posx, &pp->posy, &pp->posz, v3df_none);
+        bubble = SpawnBubble(pp->SpriteP - sprite);
+        if (bubble >= 0)
+        {
+            bp = &sprite[bubble];
+
+            // back it up a bit to get it out of your face
+            nx = MOVEx((128+64), NORM_ANGLE(bp->ang + 1024));
+            ny = MOVEy((128+64), NORM_ANGLE(bp->ang + 1024));
+
+            move_sprite(bubble, nx, ny, 0L, u->ceiling_dist, u->floor_dist, 0, synctics);
+        }
+    }
+}
+
+int
+DoPlayerTestPlaxDeath(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    // landed on a paralax floor
+    if (pp->lo_sectp && TEST(pp->lo_sectp->floorstat, FLOOR_STAT_PLAX))
+    {
+        PlayerUpdateHealth(pp, -u->Health);
+        PlayerCheckDeath(pp, -1);
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+void
+DoPlayerCurrent(PLAYERp pp)
+{
+    int xvect, yvect;
+    SECT_USERp sectu = SectUser[pp->cursectnum];
+    int push_ret;
+
+    if (!sectu)
+        return;
+
+    xvect = sectu->speed * synctics * (int) sintable[NORM_ANGLE(sectu->ang + 512)] >> 4;
+    yvect = sectu->speed * synctics * (int) sintable[sectu->ang] >> 4;
+
+    push_ret = pushmove(&pp->pos, &pp->cursectnum, ((int)pp->SpriteP->clipdist<<2), pp->ceiling_dist, pp->floor_dist, CLIPMASK_PLAYER);
+    if (push_ret < 0)
+    {
+        if (!TEST(pp->Flags, PF_DEAD))
+        {
+            USERp u = User[pp->PlayerSprite];
+
+            PlayerUpdateHealth(pp, -u->Health);  // Make sure he dies!
+            PlayerCheckDeath(pp, -1);
+
+            if (TEST(pp->Flags, PF_DEAD))
+                return;
+        }
+        return;
+    }
+    clipmove(&pp->pos, &pp->cursectnum, xvect, yvect, ((int)pp->SpriteP->clipdist<<2), pp->ceiling_dist, pp->floor_dist, CLIPMASK_PLAYER);
+    PlayerCheckValidMove(pp);
+    pushmove(&pp->pos, &pp->cursectnum, ((int)pp->SpriteP->clipdist<<2), pp->ceiling_dist, pp->floor_dist, CLIPMASK_PLAYER);
+    if (push_ret < 0)
+    {
+        if (!TEST(pp->Flags, PF_DEAD))
+        {
+            USERp u = User[pp->PlayerSprite];
+
+            PlayerUpdateHealth(pp, -u->Health);  // Make sure he dies!
+            PlayerCheckDeath(pp, -1);
+
+            if (TEST(pp->Flags, PF_DEAD))
+                return;
+        }
+        return;
+    }
+}
+
+void
+DoPlayerFireOutWater(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    if (Prediction)
+        return;
+
+    if (pp->WadeDepth > 20)
+    {
+        if (u->flame >= 0)
+            SetSuicide(u->flame);
+        u->flame = -2;
+    }
+}
+
+void
+DoPlayerFireOutDeath(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    if (Prediction)
+        return;
+
+    if (u->flame >= 0)
+        SetSuicide(u->flame);
+
+    u->flame = -2;
+}
+
+void
+DoPlayerBeginWade(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    // landed on a paralax floor?
+    if (DoPlayerTestPlaxDeath(pp))
+        return;
+
+    RESET(pp->Flags, PF_JUMPING | PF_FALLING);
+    RESET(pp->Flags, PF_CRAWLING);
+    SET(pp->Flags2, PF2_INPUT_CAN_TURN|PF2_INPUT_CAN_AIM);
+
+    pp->friction = PLAYER_WADE_FRICTION;
+    pp->floor_dist = PLAYER_WADE_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_WADE_CEILING_DIST;
+    pp->DoPlayerAction = DoPlayerWade;
+
+    DoPlayerFireOutWater(pp);
+
+    if (pp->jump_speed > 100)
+        SpawnSplash(pp->PlayerSprite);
+
+    // fix it so that you won't go under water unless you hit the water at a
+    // certain speed
+    if (pp->jump_speed > 0 && pp->jump_speed < 1300)
+        pp->jump_speed = 0;
+
+    ASSERT(u->ActorActionSet->Run);
+
+    NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Run);
+}
+
+
+void
+DoPlayerWade(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    DoPlayerFireOutWater(pp);
+
+    if (DebugOperate)
+    {
+        if (TEST_SYNC_KEY(pp, SK_OPERATE))
+        {
+            if (FLAG_KEY_PRESSED(pp, SK_OPERATE))
             {
-                int const dmg = G_DefaultActorHealthForTile(KNEE);
-                I_AddForceFeedback((dmg << FF_WEAPON_DMG_SCALE), (dmg << FF_WEAPON_DMG_SCALE), max<int>(FF_WEAPON_MAX_TIME, dmg << FF_WEAPON_TIME_SCALE));
-
-                A_DoGuts(pPlayer->actorsqu, JIBS6, 7);
-                A_Spawn(pPlayer->actorsqu, BLOODPOOL);
-                A_PlaySound(SQUISHED, pPlayer->actorsqu);
-                switch (tileGetMapping(sprite[pPlayer->actorsqu].picnum))
+                if (TEST(sector[pp->cursectnum].extra, SECTFX_OPERATIONAL))
                 {
-                    case FEM1__:
-                    case FEM2__:
-                    case FEM3__:
-                    case FEM4__:
-                    case FEM5__:
-                    case FEM6__:
-                    case FEM7__:
-                    case FEM8__:
-                    case FEM9__:
-                    case FEM10__:
-                    case PODFEM1__:
-                    case NAKED1__:
-                    case STATUE__:
-                        if (sprite[pPlayer->actorsqu].yvel)
-                            G_OperateRespawns(sprite[pPlayer->actorsqu].yvel);
-                        A_DeleteSprite(pPlayer->actorsqu);
-                        break;
-                    case APLAYER__:
-                    {
-                        const int playerSquished = P_Get(pPlayer->actorsqu);
-                        P_QuickKill(g_player[playerSquished].ps);
-                        g_player[playerSquished].ps->frag_ps = playerNum;
-                        break;
-                    }
-                    default:
-                        if (A_CheckEnemySprite(&sprite[pPlayer->actorsqu]))
-                            P_AddKills(pPlayer, 1);
-                        A_DeleteSprite(pPlayer->actorsqu);
-                        break;
+                    FLAG_KEY_RELEASE(pp, SK_OPERATE);
+                    DoPlayerBeginOperate(pp);
+                    pp->bob_amt = 0;
+                    pp->bob_ndx = 0;
+                    return;
                 }
             }
-            pPlayer->actorsqu = -1;
+        }
+        else
+        {
+            FLAG_KEY_RESET(pp, SK_OPERATE);
+        }
+    }
+
+    // Crawl if in small area automatically
+    if (DoPlayerTestCrawl(pp) && pp->WadeDepth <= PLAYER_CRAWL_WADE_DEPTH)
+    {
+        DoPlayerBeginCrawl(pp);
+        return;
+    }
+
+    // Crawl Commanded
+    if (TEST_SYNC_KEY(pp, SK_CRAWL) && pp->WadeDepth <= PLAYER_CRAWL_WADE_DEPTH)
+    {
+        DoPlayerBeginCrawl(pp);
+        return;
+    }
+
+    if (TEST_SYNC_KEY(pp, SK_JUMP))
+    {
+        if (FLAG_KEY_PRESSED(pp, SK_JUMP))
+        {
+            FLAG_KEY_RELEASE(pp, SK_JUMP);
+            //DoPlayerHeight(pp);
+            //DoPlayerHeight(pp);
+            //DoPlayerHeight(pp);
+            //DoPlayerHeight(pp);
+            DoPlayerBeginJump(pp);
+            pp->bob_amt = 0;
+            pp->bob_ndx = 0;
+            return;
+        }
+    }
+    else
+    {
+        FLAG_KEY_RESET(pp, SK_JUMP);
+    }
+
+    if (PlayerFlyKey())
+    {
+        //pp->InventoryTics[INVENTORY_FLY] = -99;
+        DoPlayerBeginFly(pp);
+        pp->bob_amt = 0;
+        pp->bob_ndx = 0;
+        return;
+    }
+
+    // If moving forward and tag is a ladder start climbing
+    if (PlayerOnLadder(pp))
+    {
+        DoPlayerBeginClimb(pp);
+        return;
+    }
+
+    if (pp->lo_sectp && TEST(pp->lo_sectp->extra, SECTFX_CURRENT))
+    {
+        DoPlayerCurrent(pp);
+    }
+
+    // Move about
+    DoPlayerMove(pp);
+
+    if (TEST(pp->Flags, PF_PLAYER_MOVED))
+    {
+        if (u->Rot != u->ActorActionSet->Run)
+            NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Run);
+    }
+    else
+    {
+        if (u->Rot != u->ActorActionSet->Stand)
+            NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Stand);
+    }
+
+    // If the floor is far below you, fall hard instead of adjusting height
+    if (labs(pp->posz - pp->loz) > PLAYER_HEIGHT + PLAYER_FALL_HEIGHT)
+    {
+        pp->jump_speed = Z(1);
+        DoPlayerBeginFall(pp);
+        // call PlayerFall now seems to iron out a hitch before falling
+        DoPlayerFall(pp);
+        return;
+    }
+
+    if (PlayerCanDive(pp))
+    {
+        pp->bob_amt = 0;
+        pp->bob_ndx = 0;
+        return;
+    }
+
+    // If the floor is far below you, fall hard instead of adjusting height
+    if (labs(pp->posz - pp->loz) > PLAYER_HEIGHT + PLAYER_FALL_HEIGHT)
+    {
+        pp->jump_speed = Z(1);
+        DoPlayerBeginFall(pp);
+        // call PlayerFall now seems to iron out a hitch before falling
+        DoPlayerFall(pp);
+        pp->bob_amt = 0;
+        pp->bob_ndx = 0;
+        return;
+    }
+
+
+    DoPlayerBob(pp);
+
+    // Adjust height moving up and down sectors
+    DoPlayerHeight(pp);
+
+#if 0
+    if ((TEST_SYNC_KEY(pp, SK_RUN) || TEST(pp->Flags, PF_LOCK_RUN)) && PlayerInDiveArea(pp))
+    {
+        DoPlayerBeginSwim(pp);
+        pp->bob_amt = 0;
+        pp->bob_ndx = 0;
+        return;
+    }
+#endif
+
+    if (!pp->WadeDepth)
+    {
+        DoPlayerBeginRun(pp);
+        return;
+    }
+}
+
+
+void
+DoPlayerBeginOperateBoat(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    pp->floor_dist = PLAYER_RUN_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_RUN_CEILING_DIST;
+    pp->DoPlayerAction = DoPlayerOperateBoat;
+
+    // temporary set to get weapons down
+    if (TEST(pp->sop->flags, SOBJ_HAS_WEAPON))
+        SET(pp->Flags, PF_WEAPON_DOWN);
+
+    ///DamageData[u->WeaponNum].Init(pp);
+
+    ASSERT(u->ActorActionSet->Run);
+
+    NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Run);
+}
+
+void
+DoPlayerBeginOperateTank(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    pp->floor_dist = PLAYER_RUN_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_RUN_CEILING_DIST;
+    pp->DoPlayerAction = DoPlayerOperateTank;
+
+    // temporary set to get weapons down
+    if (TEST(pp->sop->flags, SOBJ_HAS_WEAPON))
+        SET(pp->Flags, PF_WEAPON_DOWN);
+
+    ///DamageData[u->WeaponNum].Init(pp);
+
+    ASSERT(u->ActorActionSet->Stand);
+
+    NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Stand);
+}
+
+void
+DoPlayerBeginOperateTurret(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    pp->floor_dist = PLAYER_RUN_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_RUN_CEILING_DIST;
+    pp->DoPlayerAction = DoPlayerOperateTurret;
+
+    // temporary set to get weapons down
+    if (TEST(pp->sop->flags, SOBJ_HAS_WEAPON))
+        SET(pp->Flags, PF_WEAPON_DOWN);
+
+    ///DamageData[u->WeaponNum].Init(pp);
+
+    ASSERT(u->ActorActionSet->Stand);
+
+    NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Stand);
+}
+
+void FindMainSector(SECTOR_OBJECTp sop)
+{
+    // find the main sector - only do this once for each sector object
+    if (sop->op_main_sector < 0)
+    {
+        int sx = sop->xmid;
+        int sy = sop->ymid;
+
+        PlaceSectorObject(sop, MAXSO, MAXSO);
+
+        // set it to something valid
+        sop->op_main_sector = 0;
+
+        //COVERupdatesector(sx, sy, &sop->op_main_sector);
+        //updatesectorz(sx, sy, sop->zmid - Z(8), &sop->op_main_sector);
+
+        updatesectorz(sx, sy, sop->zmid, &sop->op_main_sector);
+
+        //COVERupdatesector(sx, sy, &sop->op_main_sector);
+
+        ////DSPRINTF(ds,"main sector %d, zmid %d",sop->op_main_sector, sop->zmid);
+        //MONO_PRINT(ds);
+
+        PlaceSectorObject(sop, sx, sy);
+    }
+}
+
+void DoPlayerOperateMatch(PLAYERp pp, SWBOOL starting)
+{
+    SPRITEp sp;
+    short i,nexti;
+
+    if (!pp->sop)
+        return;
+
+    TRAVERSE_SPRITE_SECT(headspritesect[pp->sop->mid_sector], i, nexti)
+    {
+        sp = &sprite[i];
+
+        if (sp->statnum == STAT_ST1 && sp->hitag == SO_DRIVABLE_ATTRIB)
+        {
+            if (starting)
+            {
+                if (SP_TAG5(sp))
+                    DoMatchEverything(pp, SP_TAG5(sp), -1);
+            }
+            else
+            {
+                if (TEST_BOOL2(sp) && SP_TAG5(sp))
+                    DoMatchEverything(pp, SP_TAG5(sp)+1, -1);
+            }
+            break;
+        }
+    }
+}
+
+void
+DoPlayerBeginOperate(PLAYERp pp)
+{
+    SECTOR_OBJECTp PlayerOnObject(short sectnum_match);
+    SECTOR_OBJECTp sop;
+    int cz, fz;
+    int i;
+
+    sop = PlayerOnObject(pp->cursectnum);
+
+    // if someone already controlling it
+    if (sop->controller)
+        return;
+
+    if (TEST(sop->flags, SOBJ_REMOTE_ONLY))
+        return;
+
+    if (!sop)
+    {
+        DoPlayerBeginRun(pp);
+        return;
+    }
+
+    // won't operate - broken
+    if (sop->max_damage != -9999 && sop->max_damage <= 0)
+    {
+        if (pp->InventoryAmount[INVENTORY_REPAIR_KIT])
+        {
+            UseInventoryRepairKit(pp);
+            sop->max_damage = User[sop->sp_child - sprite]->MaxHealth;
+            VehicleSetSmoke(sop, NULL);
+            RESET(sop->flags, SOBJ_BROKEN);
+        }
+        else
+        {
+            PlayerSound(DIGI_USEBROKENVEHICLE, &pp->posx, &pp->posy, &pp->posz, v3df_follow|v3df_dontpan,pp);
+            return;
+        }
+    }
+
+    pp->sop = pp->sop_control = sop;
+    sop->controller = pp->SpriteP;
+
+    pp->camq16ang = pp->q16ang = fix16_from_int(sop->ang);
+    pp->posx = sop->xmid;
+    pp->posy = sop->ymid;
+    COVERupdatesector(pp->posx, pp->posy, &pp->cursectnum);
+    getzsofslope(pp->cursectnum, pp->posx, pp->posy, &cz, &fz);
+    pp->posz = fz - PLAYER_HEIGHT;
+
+    RESET(pp->Flags, PF_CRAWLING|PF_JUMPING|PF_FALLING|PF_LOCK_CRAWL);
+
+    DoPlayerOperateMatch(pp, TRUE);
+
+    // look for gun before trying to using it
+    for (i = 0; sop->sp_num[i] != -1; i++)
+    {
+        if (sprite[sop->sp_num[i]].statnum == STAT_SO_SHOOT_POINT)
+        {
+            SET(sop->flags, SOBJ_HAS_WEAPON);
+            break;
+        }
+    }
+
+    DoPlayerResetMovement(pp);
+
+    switch (sop->track)
+    {
+    case SO_TANK:
+        if (pp->input.vel|pp->input.svel)
+            PlaySOsound(pp->sop->mid_sector, SO_DRIVE_SOUND);
+        else
+            PlaySOsound(pp->sop->mid_sector, SO_IDLE_SOUND);
+        pp->posz = fz - PLAYER_HEIGHT;
+        DoPlayerBeginOperateTank(pp);
+        break;
+    case SO_TURRET_MGUN:
+    case SO_TURRET:
+        if (pp->input.q16angvel)
+            PlaySOsound(pp->sop->mid_sector, SO_DRIVE_SOUND);
+        else
+            PlaySOsound(pp->sop->mid_sector, SO_IDLE_SOUND);
+        pp->posz = fz - PLAYER_HEIGHT;
+        DoPlayerBeginOperateTurret(pp);
+        break;
+    case SO_SPEED_BOAT:
+        if (pp->input.vel|pp->input.svel)
+            PlaySOsound(pp->sop->mid_sector, SO_DRIVE_SOUND);
+        else
+            PlaySOsound(pp->sop->mid_sector, SO_IDLE_SOUND);
+        pp->posz = fz - PLAYER_HEIGHT;
+        DoPlayerBeginOperateBoat(pp);
+        break;
+    default:
+        return;
+    }
+
+}
+
+void
+DoPlayerBeginRemoteOperate(PLAYERp pp, SECTOR_OBJECTp sop)
+{
+    SECTOR_OBJECTp PlayerOnObject(short sectnum_match);
+    int cz, fz;
+    int i;
+    short save_sectnum;
+    void PlayerRemoteReset(PLAYERp pp, short sectnum);
+
+    pp->sop_remote = pp->sop = pp->sop_control = sop;
+    sop->controller = pp->SpriteP;
+
+    // won't operate - broken
+    if (sop->max_damage != -9999 && sop->max_damage <= 0)
+    {
+        if (pp->InventoryAmount[INVENTORY_REPAIR_KIT])
+        {
+            UseInventoryRepairKit(pp);
+            sop->max_damage = User[sop->sp_child - sprite]->MaxHealth;
+            VehicleSetSmoke(sop, NULL);
+            RESET(sop->flags, SOBJ_BROKEN);
+        }
+        else
+        {
+            PlayerSound(DIGI_USEBROKENVEHICLE, &pp->posx, &pp->posy, &pp->posz, v3df_follow|v3df_dontpan,pp);
+            return;
+        }
+    }
+
+    save_sectnum = pp->cursectnum;
+
+    pp->camq16ang = pp->q16ang = fix16_from_int(sop->ang);
+    pp->posx = sop->xmid;
+    pp->posy = sop->ymid;
+    COVERupdatesector(pp->posx, pp->posy, &pp->cursectnum);
+    getzsofslope(pp->cursectnum, pp->posx, pp->posy, &cz, &fz);
+    pp->posz = fz - PLAYER_HEIGHT;
+
+    RESET(pp->Flags, PF_CRAWLING|PF_JUMPING|PF_FALLING|PF_LOCK_CRAWL);
+
+    DoPlayerOperateMatch(pp, TRUE);
+
+    // look for gun before trying to using it
+    for (i = 0; sop->sp_num[i] != -1; i++)
+    {
+        if (sprite[sop->sp_num[i]].statnum == STAT_SO_SHOOT_POINT)
+        {
+            SET(sop->flags, SOBJ_HAS_WEAPON);
+            break;
+        }
+    }
+
+    DoPlayerResetMovement(pp);
+
+    PlayerToRemote(pp);
+    PlayerRemoteInit(pp);
+
+    switch (sop->track)
+    {
+    case SO_TANK:
+        if (pp->input.vel|pp->input.svel)
+            PlaySOsound(pp->sop->mid_sector, SO_DRIVE_SOUND);
+        else
+            PlaySOsound(pp->sop->mid_sector, SO_IDLE_SOUND);
+        pp->posz = fz - PLAYER_HEIGHT;
+        DoPlayerBeginOperateTank(pp);
+        break;
+    case SO_TURRET_MGUN:
+    case SO_TURRET:
+        if (pp->input.q16angvel)
+            PlaySOsound(pp->sop->mid_sector, SO_DRIVE_SOUND);
+        else
+            PlaySOsound(pp->sop->mid_sector, SO_IDLE_SOUND);
+        pp->posz = fz - PLAYER_HEIGHT;
+        DoPlayerBeginOperateTurret(pp);
+        break;
+    case SO_SPEED_BOAT:
+        if (pp->input.vel|pp->input.svel)
+            PlaySOsound(pp->sop->mid_sector, SO_DRIVE_SOUND);
+        else
+            PlaySOsound(pp->sop->mid_sector, SO_IDLE_SOUND);
+        pp->posz = fz - PLAYER_HEIGHT;
+        DoPlayerBeginOperateBoat(pp);
+        break;
+    default:
+        return;
+    }
+
+    PlayerRemoteReset(pp, save_sectnum);
+}
+
+void PlayerToRemote(PLAYERp pp)
+{
+    pp->remote.cursectnum = pp->cursectnum;
+    pp->remote.lastcursectnum = pp->lastcursectnum;
+
+    pp->remote.posx = pp->posx;
+    pp->remote.posy = pp->posy;
+    pp->remote.posz = pp->posz;
+
+    pp->remote.xvect = pp->xvect;
+    pp->remote.yvect = pp->yvect;
+    pp->remote.oxvect = pp->oxvect;
+    pp->remote.oyvect = pp->oyvect;
+    pp->remote.slide_xvect = pp->slide_xvect;
+    pp->remote.slide_yvect = pp->slide_yvect;
+}
+
+void RemoteToPlayer(PLAYERp pp)
+{
+    pp->cursectnum = pp->remote.cursectnum;
+    pp->lastcursectnum = pp->remote.lastcursectnum;
+
+    pp->posx = pp->remote.posx;
+    pp->posy = pp->remote.posy;
+    pp->posz = pp->remote.posz;
+
+    pp->xvect = pp->remote.xvect;
+    pp->yvect = pp->remote.yvect;
+    pp->oxvect = pp->remote.oxvect;
+    pp->oyvect = pp->remote.oyvect;
+    pp->slide_xvect = pp->remote.slide_xvect;
+    pp->slide_yvect = pp->remote.slide_yvect;
+}
+
+void PlayerRemoteReset(PLAYERp pp, short sectnum)
+{
+    pp->cursectnum = pp->lastcursectnum = sectnum;
+
+    pp->posx = pp->remote_sprite->x;
+    pp->posy = pp->remote_sprite->y;
+    pp->posz = sector[sectnum].floorz - PLAYER_HEIGHT;
+
+    pp->xvect = pp->yvect = pp->oxvect = pp->oyvect = pp->slide_xvect = pp->slide_yvect = 0;
+
+    UpdatePlayerSprite(pp);
+}
+
+void PlayerRemoteInit(PLAYERp pp)
+{
+    pp->remote.xvect        = 0;
+    pp->remote.yvect        = 0;
+    pp->remote.oxvect       = 0;
+    pp->remote.oyvect       = 0;
+    pp->remote.slide_xvect  = 0;
+    pp->remote.slide_yvect  = 0;
+}
+
+void
+DoPlayerStopOperate(PLAYERp pp)
+{
+    RESET(pp->Flags, PF_WEAPON_DOWN);
+    DoPlayerResetMovement(pp);
+    DoTankTreads(pp);
+    DoPlayerOperateMatch(pp, FALSE);
+    StopSOsound(pp->sop->mid_sector);
+
+    if (pp->sop_remote)
+    {
+        if (TEST_BOOL1(pp->remote_sprite))
+            pp->camq16ang = pp->q16ang = pp->oq16ang = fix16_from_int(pp->remote_sprite->ang);
+        else
+            pp->camq16ang = pp->q16ang = pp->oq16ang = fix16_from_int(getangle(pp->sop_remote->xmid - pp->posx, pp->sop_remote->ymid - pp->posy));
+    }
+
+    if (pp->sop_control)
+    {
+        pp->sop_control->controller = NULL;
+    }
+    pp->sop_control = NULL;
+    pp->sop_riding = NULL;
+    pp->sop_remote = NULL;
+    pp->sop = NULL;
+    DoPlayerBeginRun(pp);
+}
+
+void
+DoPlayerOperateTurret(PLAYERp pp)
+{
+    short save_sectnum;
+
+    if (TEST_SYNC_KEY(pp, SK_OPERATE))
+    {
+        if (FLAG_KEY_PRESSED(pp, SK_OPERATE))
+        {
+            FLAG_KEY_RELEASE(pp, SK_OPERATE);
+            DoPlayerStopOperate(pp);
+            return;
+        }
+    }
+    else
+    {
+        FLAG_KEY_RESET(pp, SK_OPERATE);
+    }
+
+    if (pp->sop->max_damage != -9999 && pp->sop->max_damage <= 0)
+    {
+        DoPlayerStopOperate(pp);
+        return;
+    }
+
+    save_sectnum = pp->cursectnum;
+
+    if (pp->sop_remote)
+        RemoteToPlayer(pp);
+
+    DoPlayerMoveTurret(pp);
+
+    if (pp->sop_remote)
+    {
+        PlayerToRemote(pp);
+        PlayerRemoteReset(pp, save_sectnum);
+    }
+}
+
+
+void
+DoPlayerOperateBoat(PLAYERp pp)
+{
+    short save_sectnum;
+
+    if (TEST_SYNC_KEY(pp, SK_OPERATE))
+    {
+        if (FLAG_KEY_PRESSED(pp, SK_OPERATE))
+        {
+            FLAG_KEY_RELEASE(pp, SK_OPERATE);
+            DoPlayerStopOperate(pp);
+            return;
+        }
+    }
+    else
+    {
+        FLAG_KEY_RESET(pp, SK_OPERATE);
+    }
+
+    if (pp->sop->max_damage != -9999 && pp->sop->max_damage <= 0)
+    {
+        DoPlayerStopOperate(pp);
+        return;
+    }
+
+    save_sectnum = pp->cursectnum;
+
+    if (pp->sop_remote)
+        RemoteToPlayer(pp);
+
+    DoPlayerMoveBoat(pp);
+
+    if (pp->sop_remote)
+    {
+        PlayerToRemote(pp);
+        PlayerRemoteReset(pp, save_sectnum);
+    }
+}
+
+void
+DoPlayerOperateTank(PLAYERp pp)
+{
+    short save_sectnum;
+
+    //ASSERT(!TEST_SYNC_KEY(pp, SK_OPERATE));
+    if (TEST_SYNC_KEY(pp, SK_OPERATE))
+    {
+        if (FLAG_KEY_PRESSED(pp, SK_OPERATE))
+        {
+            FLAG_KEY_RELEASE(pp, SK_OPERATE);
+            DoPlayerStopOperate(pp);
+            return;
+        }
+    }
+    else
+    {
+        FLAG_KEY_RESET(pp, SK_OPERATE);
+    }
+
+    if (pp->sop->max_damage != -9999 && pp->sop->max_damage <= 0)
+    {
+        DoPlayerStopOperate(pp);
+        return;
+    }
+
+    save_sectnum = pp->cursectnum;
+
+    if (pp->sop_remote)
+        RemoteToPlayer(pp);
+
+    DoPlayerMoveTank(pp);
+
+    if (pp->sop_remote)
+    {
+        PlayerToRemote(pp);
+        PlayerRemoteReset(pp, save_sectnum);
+    }
+}
+
+void
+DoPlayerDeathJump(PLAYERp pp)
+{
+    short i;
+
+#define PLAYER_DEATH_GRAV 8
+
+    // instead of multiplying by synctics, use a loop for greater accuracy
+    for (i = 0; i < synctics; i++)
+    {
+        // adjust jump speed by gravity - if jump speed greater than 0 player
+        // have started falling
+        if ((pp->jump_speed += PLAYER_DEATH_GRAV) > 0)
+        {
+            RESET(pp->Flags, PF_JUMPING);
+            SET(pp->Flags, PF_FALLING);
+            DoPlayerDeathFall(pp);
+            return;
+        }
+
+        // adjust height by jump speed
+        pp->posz += pp->jump_speed;
+
+        // if player gets to close the ceiling while jumping
+        //if (pp->posz < pp->hiz + Z(4))
+        if (PlayerCeilingHit(pp, pp->hiz + Z(4)))
+        {
+            // put player at the ceiling
+            pp->posz = pp->hiz + Z(4);
+
+            // reverse your speed to falling
+            pp->jump_speed = -pp->jump_speed;
+
+            // start falling
+            RESET(pp->Flags, PF_JUMPING);
+            SET(pp->Flags, PF_FALLING);
+            DoPlayerDeathFall(pp);
+            return;
+        }
+    }
+}
+
+void
+DoPlayerDeathFall(PLAYERp pp)
+{
+    short i;
+    int loz;
+
+    for (i = 0; i < synctics; i++)
+    {
+        // adjust jump speed by gravity
+        pp->jump_speed += PLAYER_DEATH_GRAV;
+
+        // adjust player height by jump speed
+        pp->posz += pp->jump_speed;
+
+#if 0
+        if (pp->lo_sectp && TEST(pp->lo_sectp->extra, SECTFX_SINK))
+        {
+            loz = pp->lo_sectp->floorz - Z(SectUser[pp->lo_sectp - sector]->depth);
+        }
+        else
+            loz = pp->loz;
+#else
+        if (pp->lo_sectp && TEST(pp->lo_sectp->extra, SECTFX_SINK))
+        {
+            loz = pp->lo_sectp->floorz;
+        }
+        else
+            loz = pp->loz;
+#endif
+
+        if (PlayerFloorHit(pp, loz - PLAYER_DEATH_HEIGHT))
+        //if (pp->posz > loz - PLAYER_DEATH_HEIGHT)
+        {
+            if (loz != pp->loz)
+                SpawnSplash(pp->PlayerSprite);
+
+            if (RANDOM_RANGE(1000) > 500)
+                PlaySound(DIGI_BODYFALL1, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan);
+            else
+                PlaySound(DIGI_BODYFALL2, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan);
+
+            pp->posz = loz - PLAYER_DEATH_HEIGHT;
+            RESET(pp->Flags, PF_FALLING);
+        }
+    }
+}
+
+#define MAX_SUICIDE 11
+const char *SuicideNote[MAX_SUICIDE] =
+{
+    "decided to do the graveyard tour.",
+    "had enough and checked out.",
+    "didn't fear the Reaper.",
+    "dialed the 1-800-CYANIDE line.",
+    "wasted himself.",
+    "kicked his own ass.",
+    "went out in blaze of his own glory.",
+    "killed himself before anyone else could.",
+    "needs shooting lessons.",
+    "blew his head off.",
+    "did everyone a favor and offed himself."
+};
+
+char *KilledPlayerMessage(PLAYERp pp, PLAYERp killer)
+{
+#define MAX_KILL_NOTES 16
+    short rnd = STD_RANDOM_RANGE(MAX_KILL_NOTES);
+    char *p1 = pp->PlayerName;
+    char *p2 = killer->PlayerName;
+
+    if (pp->HitBy == killer->PlayerSprite)
+    {
+        sprintf(ds,"%s was killed by %s.",p1,p2);
+        return ds;
+    }
+    else
+        switch (rnd)
+        {
+        case 0:
+            sprintf(ds,"%s was wasted by %s's %s.",p1,p2,DeathString(pp->HitBy));
+            return ds;
+        case 1:
+            sprintf(ds,"%s got his ass kicked by %s's %s.",p1,p2,DeathString(pp->HitBy));
+            return ds;
+        case 2:
+            sprintf(ds,"%s bows down before the mighty power of %s.",p1,p2);
+            return ds;
+        case 3:
+            sprintf(ds,"%s was killed by %s's %s.",p1,p2,DeathString(pp->HitBy));
+            return ds;
+        case 4:
+            sprintf(ds,"%s got slapped down hard by %s's %s.",p1,p2,DeathString(pp->HitBy));
+            return ds;
+        case 5:
+            sprintf(ds,"%s got on his knees before %s.",p1,p2);
+            return ds;
+        case 6:
+            sprintf(ds,"%s was totally out classed by %s's %s.",p1,p2,DeathString(pp->HitBy));
+            return ds;
+        case 7:
+            sprintf(ds,"%s got chewed apart by %s's %s.",p1,p2,DeathString(pp->HitBy));
+            return ds;
+        case 8:
+            sprintf(ds,"%s was retired by %s's %s.",p1,p2,DeathString(pp->HitBy));
+            return ds;
+        case 9:
+            sprintf(ds,"%s was greased by %s's %s.",p1,p2,DeathString(pp->HitBy));
+            return ds;
+        case 10:
+            sprintf(ds,"%s was humbled lower than dirt by %s.",p1,p2);
+            return ds;
+        case 11:
+            sprintf(ds,"%s beats %s like a red headed step child.",p2,p1);
+            return ds;
+        case 12:
+            sprintf(ds,"%s begs for mercy as %s terminates him with extreme prejudice.",p1,p2);
+            return ds;
+        case 13:
+            sprintf(ds,"%s falls before the superior skills of %s.",p1,p2);
+            return ds;
+        case 14:
+            sprintf(ds,"%s gives %s a beating he'll never forget.",p2,p1);
+            return ds;
+        case 15:
+            sprintf(ds,"%s puts the Smack Dab on %s with his %s.",p2,p1,DeathString(pp->HitBy));
+            return ds;
+        }
+    return NULL;
+};
+
+void
+DoPlayerDeathMessage(PLAYERp pp, PLAYERp killer)
+{
+    int pnum;
+    SWBOOL SEND_OK = FALSE;
+
+    killer->KilledPlayer[pp-Player]++;
+
+    if (pp == killer && pp == Player + myconnectindex)
+    {
+        sprintf(ds,"%s %s",pp->PlayerName,SuicideNote[STD_RANDOM_RANGE(MAX_SUICIDE)]);
+        SEND_OK = TRUE;
+    }
+    else
+    // I am being killed
+    if (killer == Player + myconnectindex)
+    {
+        sprintf(ds,"%s",KilledPlayerMessage(pp,killer));
+        SEND_OK = TRUE;
+    }
+
+    if (SEND_OK)
+    {
+        TRAVERSE_CONNECT(pnum)
+        {
+            if (pnum == myconnectindex)
+                adduserquote(ds);
+            else
+                SW_SendMessage(pnum, ds);
+        }
+    }
+
+}
+
+
+void
+DoPlayerBeginDie(PLAYERp pp)
+{
+    void KillAllPanelInv(PLAYERp pp);
+    void DoPlayerDeathDrown(PLAYERp pp);
+    void pWeaponForceRest(PLAYERp pp);
+    short bak;
+    int choosesnd = 0;
+    extern short GlobInfoStringTime;
+    extern short QuickLoadNum;
+
+    USERp u = User[pp->PlayerSprite];
+
+    static void (*PlayerDeathFunc[MAX_PLAYER_DEATHS]) (PLAYERp) =
+    {
+        DoPlayerDeathFlip,
+        DoPlayerDeathCrumble,
+        DoPlayerDeathExplode,
+        DoPlayerDeathFlip,
+        DoPlayerDeathExplode,
+        DoPlayerDeathDrown,
+    };
+
+#define PLAYER_DEATH_TILT_VALUE       (32)
+#define PLAYER_DEATH_HORIZ_UP_VALUE   (165)
+#define PLAYER_DEATH_HORIZ_JUMP_VALUE (150)
+#define PLAYER_DEATH_HORIZ_FALL_VALUE (50)
+
+    if (Prediction)
+        return;
+
+    if (GodMode)
+        return;
+
+    // Ensure these are initially locked
+    pp->camq16ang = pp->q16ang;
+    pp->camq16horiz = pp->q16horiz;
+
+    // Override any previous talking, death scream has precedance
+    if (pp->PlayerTalking)
+    {
+        if (FX_SoundValidAndActive(pp->TalkVocHandle))
+            FX_StopSound(pp->TalkVocHandle);
+        pp->PlayerTalking = FALSE;
+        pp->TalkVocnum = -1;
+        pp->TalkVocHandle = -1;
+    }
+
+    // Do the death scream
+    choosesnd = RANDOM_RANGE(MAX_PAIN);
+
+    PlayerSound(PlayerLowHealthPainVocs[choosesnd],&pp->posx,
+                &pp->posy,&pp->posy,v3df_dontpan|v3df_doppler|v3df_follow,pp);
+
+    if (!CommEnabled && numplayers <= 1 && QuickLoadNum >= 0)
+    {
+        ReloadPrompt = TRUE;
+    }
+    else
+    {
+        bak = GlobInfoStringTime;
+        GlobInfoStringTime = 999;
+        PutStringInfo(pp, "Press SPACE to restart");
+        GlobInfoStringTime = bak;
+    }
+
+    if (pp->sop_control)
+        DoPlayerStopOperate(pp);
+
+    // if diving force death to drown type
+    if (TEST(pp->Flags, PF_DIVING))
+        pp->DeathType = PLAYER_DEATH_DROWN;
+
+    RESET(pp->Flags, PF_JUMPING|PF_FALLING|PF_DIVING|PF_FLYING|PF_CLIMBING|PF_CRAWLING|PF_LOCK_CRAWL);
+
+#if 0
+    short random;
+
+    // get tilt value
+    random = RANDOM_P2(1024);
+    if (random < 128)
+        pp->tilt_dest = 0;
+    else if (random < 512+64)
+        pp->tilt_dest = PLAYER_DEATH_TILT_VALUE;
+    else
+        pp->tilt_dest = -PLAYER_DEATH_TILT_VALUE;
+#else
+    pp->tilt_dest = 0;
+#endif
+
+    ActorCoughItem(pp->PlayerSprite);
+
+    if (numplayers > 1)
+    {
+        // Give kill credit to player if necessary
+        if (pp->Killer >= 0)
+        {
+            USERp ku = User[pp->Killer];
+
+            ASSERT(ku);
+
+            if (ku && ku->PlayerP)
+            {
+                if (pp == ku->PlayerP)
+                {
+                    // Killed yourself
+                    PlayerUpdateKills(pp, -1);
+                    DoPlayerDeathMessage(pp, pp);
+                }
+                else
+                {
+                    // someone else killed you
+                    if (gNet.TeamPlay)
+                    {
+                        // playing team play
+                        if (User[pp->PlayerSprite]->spal == ku->spal)
+                        {
+                            // Killed your team member
+                            PlayerUpdateKills(pp, -1);
+                            DoPlayerDeathMessage(pp, ku->PlayerP);
+                        }
+                        else
+                        {
+                            // killed another team member
+                            PlayerUpdateKills(ku->PlayerP, 1);
+                            DoPlayerDeathMessage(pp, ku->PlayerP);
+                        }
+                    }
+                    else
+                    {
+                        // not playing team play
+                        PlayerUpdateKills(ku->PlayerP, 1);
+                        DoPlayerDeathMessage(pp, ku->PlayerP);
+                    }
+                }
+            }
+        }
+        else
+        {
+            // Killed by some hazard - negative frag
+            PlayerUpdateKills(pp, -1);
+            DoPlayerDeathMessage(pp, pp);
+        }
+    }
+
+
+    // Get rid of all panel spells that are currently working
+    KillAllPanelInv(pp);
+
+    SET(pp->Flags, PF_LOCK_HORIZ);
+
+    pp->friction = PLAYER_RUN_FRICTION;
+    pp->slide_xvect = pp->slide_yvect = 0;
+    pp->floor_dist = PLAYER_WADE_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_WADE_CEILING_DIST;
+    ASSERT(pp->DeathType < SIZ(PlayerDeathFunc));
+    pp->DoPlayerAction = PlayerDeathFunc[pp->DeathType];
+    pp->sop_control = NULL;
+    pp->sop_remote = NULL;
+    pp->sop_riding = NULL;
+    pp->sop = NULL;
+    RESET(pp->Flags, PF_TWO_UZI);
+
+    NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Run);
+    pWeaponForceRest(pp);
+
+    switch (pp->DeathType)
+    {
+    case PLAYER_DEATH_DROWN:
+    {
+        SET(pp->Flags, PF_JUMPING);
+        u->ID = NINJA_DEAD;
+        pp->jump_speed = -200;
+        NewStateGroup(pp->PlayerSprite, sg_PlayerDeath);
+        DoFindGround(pp->PlayerSprite);
+        DoBeginJump(pp->PlayerSprite);
+        u->jump_speed = -300;
+        break;
+    }
+    case PLAYER_DEATH_FLIP:
+    case PLAYER_DEATH_RIPPER:
+
+        //PlaySound(DIGI_SCREAM1, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan|v3df_follow);
+
+        SET(pp->Flags, PF_JUMPING);
+        u->ID = NINJA_DEAD;
+        pp->jump_speed = -300;
+        NewStateGroup(pp->PlayerSprite, sg_PlayerDeath);
+        //pp->ceiling_dist = Z(0);
+        //pp->floor_dist = Z(0);
+
+        RESET(pp->SpriteP->cstat, CSTAT_SPRITE_BLOCK|CSTAT_SPRITE_BLOCK_HITSCAN);
+        u->ceiling_dist = Z(10);
+        u->floor_dist = Z(0);
+        DoFindGround(pp->PlayerSprite);
+        DoBeginJump(pp->PlayerSprite);
+        u->jump_speed = -400;
+        break;
+    case PLAYER_DEATH_CRUMBLE:
+
+        PlaySound(DIGI_BODYSQUISH1, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan);
+
+        SET(pp->Flags, PF_DEAD_HEAD | PF_JUMPING);
+        pp->jump_speed = -300;
+        u->slide_vel = 0;
+        SpawnShrap(pp->PlayerSprite,-1);
+        SET(pp->SpriteP->cstat, CSTAT_SPRITE_YCENTER);
+        NewStateGroup(pp->PlayerSprite, sg_PlayerHeadFly);
+        u->ID = NINJA_Head_R0;
+        pp->SpriteP->xrepeat = 48;
+        pp->SpriteP->yrepeat = 48;
+        // Blood fountains
+        InitBloodSpray(pp->PlayerSprite,TRUE,105);
+        break;
+    case PLAYER_DEATH_EXPLODE:
+
+        PlaySound(DIGI_BODYSQUISH1, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan);
+
+        SET(pp->Flags, PF_DEAD_HEAD | PF_JUMPING);
+        pp->jump_speed = -650;
+        SpawnShrap(pp->PlayerSprite,-1);
+        SET(pp->SpriteP->cstat, CSTAT_SPRITE_YCENTER);
+        NewStateGroup(pp->PlayerSprite, sg_PlayerHeadFly);
+        u->ID = NINJA_Head_R0;
+        pp->SpriteP->xrepeat = 48;
+        pp->SpriteP->yrepeat = 48;
+        // Blood fountains
+        InitBloodSpray(pp->PlayerSprite,TRUE,-1);
+        InitBloodSpray(pp->PlayerSprite,TRUE,-1);
+        InitBloodSpray(pp->PlayerSprite,TRUE,-1);
+        break;
+    case PLAYER_DEATH_SQUISH:
+
+        PlaySound(DIGI_BODYCRUSHED1, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan);
+
+        SET(pp->Flags, PF_DEAD_HEAD | PF_JUMPING);
+        pp->jump_speed = 200;
+        u->slide_vel = 800;
+        SpawnShrap(pp->PlayerSprite, -1);
+        SET(pp->SpriteP->cstat, CSTAT_SPRITE_YCENTER);
+        NewStateGroup(pp->PlayerSprite, sg_PlayerHeadFly);
+        u->ID = NINJA_Head_R0;
+        pp->SpriteP->xrepeat = 48;
+        pp->SpriteP->yrepeat = 48;
+        // Blood fountains
+        InitBloodSpray(pp->PlayerSprite,TRUE,105);
+        break;
+
+    }
+
+    SET(pp->Flags, PF_DEAD);
+    RESET(u->Flags,SPR_BOUNCE);
+    RESET(pp->Flags, PF_HEAD_CONTROL);
+}
+
+int
+DoPlayerDeathHoriz(PLAYERp pp, short target, short speed)
+{
+    if (pp->q16horiz > fix16_from_int(target))
+    {
+        pp->q16horiz -= fix16_from_int(speed);
+        if (pp->q16horiz <= fix16_from_int(target))
+            pp->q16horiz = fix16_from_int(target);
+    }
+
+    if (pp->q16horiz < fix16_from_int(target))
+    {
+        pp->q16horiz += fix16_from_int(speed);
+        if (pp->q16horiz >= fix16_from_int(target))
+            pp->q16horiz = fix16_from_int(target);
+    }
+
+    pp->camq16horiz = pp->q16horiz;
+    return pp->q16horiz == fix16_from_int(target);
+}
+
+int
+DoPlayerDeathTilt(PLAYERp pp, short target, short speed)
+{
+    if (pp->tilt > target)
+    {
+        pp->tilt -= speed;
+        if (pp->tilt <= target)
+            pp->tilt = target;
+    }
+
+    if (pp->tilt < target)
+    {
+        pp->tilt += speed;
+        if (pp->tilt >= target)
+            pp->tilt = target;
+    }
+
+    return pp->tilt == target;
+}
+
+
+void
+DoPlayerDeathZrange(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    // make sure we don't land on a regular sprite
+    DoFindGround(pp->PlayerSprite);
+
+    // update player values with results from DoFindGround
+//    pp->hiz = u->hiz;
+    pp->loz = u->loz;
+    pp->lo_sp = u->lo_sp;
+    //pp->hi_sp = u->hi_sp;
+    pp->lo_sectp = u->lo_sectp;
+    //pp->hi_sectp = u->hi_sectp;
+}
+
+void DoPlayerDeathHurl(PLAYERp pp)
+{
+    if (numplayers > 1)
+    {
+        if (TEST_SYNC_KEY(pp, SK_SHOOT))
+        {
+            if (FLAG_KEY_PRESSED(pp, SK_SHOOT))
+            {
+
+
+                SET(pp->Flags, PF_HEAD_CONTROL);
+                NewStateGroup(pp->PlayerSprite, sg_PlayerHeadHurl);
+                if (MoveSkip4 == 0)
+                {
+                    SpawnShrap(pp->PlayerSprite, -1);
+                    if (RANDOM_RANGE(1000) > 400)
+                        PlayerSound(DIGI_DHVOMIT, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan|v3df_follow,pp);
+                }
+                return;
+            }
+        }
+    }
+
+    if (!TEST(pp->Flags, PF_JUMPING|PF_FALLING))
+        NewStateGroup(pp->PlayerSprite, sg_PlayerHead);
+}
+
+
+void DoPlayerDeathFollowKiller(PLAYERp pp)
+{
+    // if it didn't make it to this angle because of a low ceiling or something
+    // continue on to it
+    DoPlayerDeathHoriz(pp, PLAYER_DEATH_HORIZ_UP_VALUE, 4);
+    //DoPlayerDeathTilt(pp, pp->tilt_dest, 4 * synctics);
+
+    // allow turning
+    if (TEST(pp->Flags, PF_DEAD_HEAD|PF_HEAD_CONTROL))
+        SET(pp->Flags2, PF2_INPUT_CAN_TURN);
+
+    if ((TEST(pp->Flags, PF_DEAD_HEAD) && pp->input.q16angvel != 0) || TEST(pp->Flags, PF_HEAD_CONTROL))
+    {
+        // Allow them to turn fast
+        PLAYER_RUN_LOCK(pp);
+
+        DoPlayerTurn(pp, &pp->q16ang, pp->input.q16angvel);
+        return;
+    }
+
+    // follow what killed you if its available
+    if (pp->Killer > -1)
+    {
+        SPRITEp kp = &sprite[pp->Killer];
+        fix16_t q16ang2, delta_q16ang;
+
+        if (FAFcansee(kp->x, kp->y, SPRITEp_TOS(kp), kp->sectnum,
+                      pp->posx, pp->posy, pp->posz, pp->cursectnum))
+        {
+            q16ang2 = GetQ16AngleFromVect(kp->x - pp->posx, kp->y - pp->posy);
+
+            delta_q16ang = GetDeltaQ16Angle(q16ang2, pp->q16ang);
+            pp->camq16ang = pp->q16ang = NORM_Q16ANGLE(pp->q16ang + PedanticQ16AngleFloor(delta_q16ang >> 4));
+        }
+    }
+}
+
+void DoPlayerDeathCheckKeys(PLAYERp pp)
+{
+    SPRITEp sp = pp->SpriteP;
+    USERp u = User[pp->PlayerSprite];
+    extern SWBOOL DemoMode,DemoDone;
+
+    //if (TEST_SYNC_KEY(pp, SK_OPERATE))
+    if (TEST_SYNC_KEY(pp, SK_SPACE_BAR))
+    {
+        // Spawn a dead LoWang body for non-head deaths
+        // Hey Frank, if you think of a better check, go ahead and put it in.
+        if (PlayerFloorHit(pp, pp->loz - PLAYER_HEIGHT))
+        {
+            if (pp->DeathType == PLAYER_DEATH_FLIP || pp->DeathType == PLAYER_DEATH_RIPPER)
+                QueueLoWangs(pp->PlayerSprite);
+        }
+        else
+        {
+            // If he's not on the floor, then gib like a mo-fo!
+            InitBloodSpray(pp->PlayerSprite,TRUE,-1);
+            InitBloodSpray(pp->PlayerSprite,TRUE,-1);
+            InitBloodSpray(pp->PlayerSprite,TRUE,-1);
+        }
+
+        pClearTextLine(pp, TEXT_INFO_LINE(0));
+
+        PlayerSpawnPosition(pp);
+
+        NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Stand);
+        pp->SpriteP->picnum = u->State->Pic;
+        pp->SpriteP->xrepeat = pp->SpriteP->yrepeat = PLAYER_NINJA_XREPEAT;
+        RESET(pp->SpriteP->cstat, CSTAT_SPRITE_YCENTER);
+        pp->SpriteP->x = pp->posx;
+        pp->SpriteP->y = pp->posy;
+        pp->SpriteP->z = pp->posz+PLAYER_HEIGHT;
+        pp->SpriteP->ang = fix16_to_int(pp->q16ang);
+
+        DoSpawnTeleporterEffect(pp->SpriteP);
+        PlaySound(DIGI_TELEPORT, &pp->posx, &pp->posy, &pp->posz, v3df_none);
+
+        DoPlayerZrange(pp);
+
+        pp->sop_control = NULL;
+        pp->sop_remote = NULL;
+        pp->sop_riding = NULL;
+        pp->sop = NULL;
+
+        RESET(pp->Flags, PF_WEAPON_DOWN|PF_WEAPON_RETRACT);
+        RESET(pp->Flags, PF_DEAD);
+        RESET(pp->Flags, PF_LOCK_HORIZ);
+        RESET(sp->cstat, CSTAT_SPRITE_YCENTER);
+        SET(sp->cstat, CSTAT_SPRITE_BLOCK|CSTAT_SPRITE_BLOCK_HITSCAN);
+        sp->xrepeat = PLAYER_NINJA_XREPEAT;
+        sp->yrepeat = PLAYER_NINJA_YREPEAT;
+
+        //pp->tilt = 0;
+        pp->camq16horiz = pp->q16horiz = pp->q16horizbase = fix16_from_int(100);
+        DoPlayerResetMovement(pp);
+        u->ID = NINJA_RUN_R0;
+        PlayerDeathReset(pp);
+
+        if (pp == Player + screenpeek)
+        {
+            if (videoGetRenderMode() < REND_POLYMOST)
+                COVERsetbrightness(gs.Brightness,&palette_data[0][0]);
+            else
+                videoFadePalette(0,0,0,0);
+            //memcpy(&palette_data[0][0],&palette_data[0][0],768);
+            memcpy(&pp->temp_pal[0],&palette_data[0][0],768);
+        }
+
+        pp->NightVision = FALSE;
+        pp->FadeAmt = 0;
+        DoPlayerDivePalette(pp);
+        DoPlayerNightVisionPalette(pp);
+
+        if (numplayers > 1)
+        {
+            // need to call this routine BEFORE resetting DEATH flag
+            DoPlayerBeginRun(pp);
+        }
+        else
+        {
+            // restart the level in single play
+            if (DemoMode)
+                DemoDone = TRUE;
+            else
+                ExitLevel = TRUE;
+        }
+
+        DoPlayerFireOutDeath(pp);
+    }
+}
+
+void
+DoPlayerHeadDebris(PLAYERp pp)
+{
+    SECTORp sectp = &sector[pp->cursectnum];
+
+    if (TEST(sectp->extra, SECTFX_SINK))
+    {
+        DoPlayerSpriteBob(pp, Z(8), Z(4), 3);
+    }
+    else
+    {
+        pp->bob_amt = 0;
+    }
+}
+
+SPRITEp DoPlayerDeathCheckKick(PLAYERp pp)
+{
+    SPRITEp sp = pp->SpriteP, hp;
+    USERp u = User[pp->PlayerSprite], hu;
+    short i,nexti;
+    unsigned stat,dist;
+    int a,b,c;
+
+    for (stat = 0; stat < SIZ(StatDamageList); stat++)
+    {
+        TRAVERSE_SPRITE_STAT(headspritestat[StatDamageList[stat]], i, nexti)
+        {
+            hp = &sprite[i];
+            hu = User[i];
+
+            if (i == pp->PlayerSprite)
+                break;
+
+            // don't set off mine
+            if (!TEST(hp->extra, SPRX_PLAYER_OR_ENEMY))
+                continue;
+
+            DISTANCE(hp->x, hp->y, sp->x, sp->y, dist, a, b, c);
+
+            if (dist < hu->Radius + 100)
+            {
+                pp->Killer = i;
+
+                u->slide_ang = getangle(sp->x - hp->x, sp->y - hp->y);
+                u->slide_ang = NORM_ANGLE(u->slide_ang + (RANDOM_P2(128<<5)>>5) - 64);
+
+                u->slide_vel = hp->xvel<<1;
+                RESET(u->Flags,SPR_BOUNCE);
+                pp->jump_speed = -500;
+                NewStateGroup(pp->PlayerSprite, sg_PlayerHeadFly);
+                SET(pp->Flags, PF_JUMPING);
+                SpawnShrap(pp->PlayerSprite, -1);
+                return hp;
+            }
+        }
+    }
+
+    DoPlayerZrange(pp);
+
+    // sector stomper kick
+    if (labs(pp->loz - pp->hiz) < SPRITEp_SIZE_Z(pp->SpriteP) - Z(8))
+    {
+        u->slide_ang = RANDOM_P2(2048);
+        u->slide_vel = 1000;
+        RESET(u->Flags,SPR_BOUNCE);
+        pp->jump_speed = -100;
+        NewStateGroup(pp->PlayerSprite, sg_PlayerHeadFly);
+        SET(pp->Flags, PF_JUMPING);
+        SpawnShrap(pp->PlayerSprite, -1);
+        return NULL;
+    }
+
+    return NULL;
+}
+
+
+void DoPlayerDeathMoveHead(PLAYERp pp)
+{
+    SPRITEp sp = pp->SpriteP;
+    USERp u = User[pp->PlayerSprite];
+    int dax,day;
+    short sectnum;
+
+    dax = MOVEx(u->slide_vel, u->slide_ang);
+    day = MOVEy(u->slide_vel, u->slide_ang);
+
+    if ((u->ret = move_sprite(pp->PlayerSprite, dax, day, 0, Z(16), Z(16), 1, synctics)))
+    {
+        switch (TEST(u->ret, HIT_MASK))
+        {
+        case HIT_SPRITE:
+        {
+            short wall_ang, dang;
+            short hit_sprite = -2;
+            SPRITEp hsp;
+
+            //PlaySound(DIGI_DHCLUNK, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan);
+
+            hit_sprite = NORM_SPRITE(u->ret);
+            hsp = &sprite[hit_sprite];
+
+            if (!TEST(hsp->cstat, CSTAT_SPRITE_ALIGNMENT_WALL))
+                break;
+
+
+            wall_ang = NORM_ANGLE(hsp->ang);
+            dang = GetDeltaAngle(u->slide_ang, wall_ang);
+            u->slide_ang = NORM_ANGLE(wall_ang + 1024 - dang);
+
+            SpawnShrap(pp->PlayerSprite, -1);
+            break;
+        }
+        case HIT_WALL:
+        {
+            short w,nw,wall_ang,dang;
+
+            //PlaySound(DIGI_DHCLUNK, &pp->posx, &pp->posy, &pp->posz, v3df_dontpan);
+
+            w = NORM_WALL(u->ret);
+
+            nw = wall[w].point2;
+            wall_ang = NORM_ANGLE(getangle(wall[nw].x - wall[w].x, wall[nw].y - wall[w].y)-512);
+
+            dang = GetDeltaAngle(u->slide_ang, wall_ang);
+            u->slide_ang = NORM_ANGLE(wall_ang + 1024 - dang);
+
+            SpawnShrap(pp->PlayerSprite, -1);
+            break;
+        }
+        }
+    }
+
+    pp->posx = sp->x;
+    pp->posy = sp->y;
+    pp->cursectnum = sp->sectnum;
+
+    // try to stay in valid area - death sometimes throws you out of the map
+    sectnum = pp->cursectnum;
+    COVERupdatesector(pp->posx, pp->posy, &sectnum);
+    if (sectnum < 0)
+    {
+        pp->cursectnum = pp->lv_sectnum;
+        changespritesect(pp->PlayerSprite, pp->lv_sectnum);
+        pp->posx = sp->x = pp->lv_x;
+        pp->posy = sp->y = pp->lv_y;
+    }
+    else
+    {
+        pp->lv_sectnum = sectnum;
+        pp->lv_x = pp->posx;
+        pp->lv_y = pp->posy;
+    }
+}
+
+void DoPlayerDeathFlip(PLAYERp pp)
+{
+    if (Prediction)
+        return;
+
+    DoPlayerDeathZrange(pp);
+
+    if (TEST(pp->Flags,PF_JUMPING|PF_FALLING))
+    {
+        if (TEST(pp->Flags,PF_JUMPING))
+        {
+            DoPlayerDeathJump(pp);
+            DoPlayerDeathHoriz(pp, PLAYER_DEATH_HORIZ_UP_VALUE, 2);
+            if (MoveSkip2 == 0)
+                DoJump(pp->PlayerSprite);
+        }
+
+        if (TEST(pp->Flags,PF_FALLING))
+        {
+            DoPlayerDeathFall(pp);
+            DoPlayerDeathHoriz(pp, PLAYER_DEATH_HORIZ_UP_VALUE, 4);
+            if (MoveSkip2 == 0)
+                DoFall(pp->PlayerSprite);
+        }
+    }
+    else
+    {
+        DoPlayerDeathFollowKiller(pp);
+    }
+
+    DoPlayerDeathCheckKeys(pp);
+}
+
+
+
+void DoPlayerDeathDrown(PLAYERp pp)
+{
+    SPRITEp sp = pp->SpriteP;
+
+    if (Prediction)
+        return;
+
+    DoPlayerDeathZrange(pp);
+
+    if (TEST(pp->Flags,PF_JUMPING|PF_FALLING))
+    {
+        if (TEST(pp->Flags,PF_JUMPING))
+        {
+            DoPlayerDeathJump(pp);
+            DoPlayerDeathHoriz(pp, PLAYER_DEATH_HORIZ_UP_VALUE, 2);
+            if (MoveSkip2 == 0)
+                DoJump(pp->PlayerSprite);
+        }
+
+        if (TEST(pp->Flags,PF_FALLING))
+        {
+            pp->posz += Z(2);
+            if (MoveSkip2 == 0)
+                sp->z += Z(4);
+
+            // Stick like glue when you hit the ground
+            if (pp->posz > pp->loz - PLAYER_DEATH_HEIGHT)
+            {
+                pp->posz = pp->loz - PLAYER_DEATH_HEIGHT;
+                RESET(pp->Flags, PF_FALLING);
+            }
+        }
+    }
+
+    DoPlayerDeathFollowKiller(pp);
+    DoPlayerDeathCheckKeys(pp);
+}
+
+
+void DoPlayerDeathBounce(PLAYERp pp)
+{
+    SPRITEp sp = pp->SpriteP;
+    USERp u = User[pp->PlayerSprite];
+
+    if (Prediction)
+        return;
+
+    if (pp->lo_sectp && TEST(pp->lo_sectp->extra, SECTFX_SINK))
+    {
+        RESET(sp->cstat, CSTAT_SPRITE_BLOCK|CSTAT_SPRITE_BLOCK_HITSCAN);
+        NewStateGroup(pp->PlayerSprite, sg_PlayerHead);
+        u->slide_vel = 0;
+        SET(u->Flags, SPR_BOUNCE);
+
+
+        return;
+    }
+
+    SET(u->Flags, SPR_BOUNCE);
+    pp->jump_speed = -300;
+    u->slide_vel >>= 2;
+    u->slide_ang = NORM_ANGLE((RANDOM_P2(64<<8)>>8) - 32);
+    SET(pp->Flags, PF_JUMPING);
+    SpawnShrap(pp->PlayerSprite, -1);
+}
+
+
+
+
+void DoPlayerDeathCrumble(PLAYERp pp)
+{
+    SPRITEp sp = pp->SpriteP;
+    USERp u = User[pp->PlayerSprite];
+
+    if (Prediction)
+        return;
+
+    DoPlayerDeathZrange(pp);
+
+    if (TEST(pp->Flags,PF_JUMPING|PF_FALLING))
+    {
+        if (TEST(pp->Flags,PF_JUMPING))
+        {
+            DoPlayerDeathJump(pp);
+            DoPlayerDeathHoriz(pp, PLAYER_DEATH_HORIZ_JUMP_VALUE, 4);
+        }
+
+        if (TEST(pp->Flags,PF_FALLING))
+        {
+            DoPlayerDeathFall(pp);
+            DoPlayerDeathHoriz(pp, PLAYER_DEATH_HORIZ_FALL_VALUE, 3);
+        }
+
+        if (!TEST(pp->Flags,PF_JUMPING|PF_FALLING))
+        {
+            if (!TEST(u->Flags, SPR_BOUNCE))
+            {
+                DoPlayerDeathBounce(pp);
+                return;
+            }
+
+            RESET(sp->cstat, CSTAT_SPRITE_BLOCK|CSTAT_SPRITE_BLOCK_HITSCAN);
+            NewStateGroup(pp->PlayerSprite, sg_PlayerHead);
+        }
+        else
+        {
+            DoPlayerDeathMoveHead(pp);
+        }
+    }
+    else
+    {
+        DoPlayerDeathCheckKick(pp);
+        DoPlayerDeathHurl(pp);
+        DoPlayerDeathFollowKiller(pp);
+        //pp->posz = pp->loz - PLAYER_DEATH_HEIGHT;
+    }
+
+    DoPlayerDeathCheckKeys(pp);
+    sp->z = pp->posz+PLAYER_DEAD_HEAD_FLOORZ_OFFSET;
+    DoPlayerHeadDebris(pp);
+}
+
+void DoPlayerDeathExplode(PLAYERp pp)
+{
+    SPRITEp sp = pp->SpriteP;
+    USERp u = User[pp->PlayerSprite];
+
+    if (Prediction)
+        return;
+
+    DoPlayerDeathZrange(pp);
+
+    if (TEST(pp->Flags,PF_JUMPING|PF_FALLING))
+    {
+        if (TEST(pp->Flags,PF_JUMPING))
+        {
+            DoPlayerDeathJump(pp);
+            DoPlayerDeathHoriz(pp, PLAYER_DEATH_HORIZ_JUMP_VALUE, 4);
+        }
+
+        if (TEST(pp->Flags,PF_FALLING))
+        {
+            DoPlayerDeathFall(pp);
+            DoPlayerDeathHoriz(pp, PLAYER_DEATH_HORIZ_JUMP_VALUE, 3);
+        }
+
+        if (!TEST(pp->Flags,PF_JUMPING|PF_FALLING))
+        {
+            if (!TEST(u->Flags, SPR_BOUNCE))
+            {
+                DoPlayerDeathBounce(pp);
+                return;
+            }
+
+            RESET(sp->cstat, CSTAT_SPRITE_BLOCK|CSTAT_SPRITE_BLOCK_HITSCAN);
+            NewStateGroup(pp->PlayerSprite, sg_PlayerHead);
+        }
+        else
+        {
+            DoPlayerDeathMoveHead(pp);
+        }
+    }
+    else
+    {
+        // special line for amoeba
+        //COVERupdatesector(pp->posx, pp->posy, &pp->cursectnum);
+
+        DoPlayerDeathCheckKick(pp);
+        DoPlayerDeathHurl(pp);
+        DoPlayerDeathFollowKiller(pp);
+        //pp->posz = pp->loz - PLAYER_DEATH_HEIGHT;
+    }
+
+    DoPlayerDeathCheckKeys(pp);
+    sp->z = pp->posz+PLAYER_DEAD_HEAD_FLOORZ_OFFSET;
+    DoPlayerHeadDebris(pp);
+}
+
+void
+DoPlayerBeginRun(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    // Crawl if in small aread automatically
+    if (DoPlayerTestCrawl(pp))
+    {
+        DoPlayerBeginCrawl(pp);
+        return;
+    }
+
+    RESET(pp->Flags, PF_CRAWLING|PF_JUMPING|PF_FALLING|PF_LOCK_CRAWL|PF_CLIMBING);
+    SET(pp->Flags2, PF2_INPUT_CAN_TURN|PF2_INPUT_CAN_AIM);
+
+    if (pp->WadeDepth)
+    {
+        DoPlayerBeginWade(pp);
+        return;
+    }
+
+    pp->friction = PLAYER_RUN_FRICTION;
+    pp->floor_dist = PLAYER_RUN_FLOOR_DIST;
+    pp->ceiling_dist = PLAYER_RUN_CEILING_DIST;
+    pp->DoPlayerAction = DoPlayerRun;
+
+    ///DamageData[u->WeaponNum].Init(pp);
+
+    ASSERT(u->ActorActionSet->Run);
+
+    if (TEST(pp->Flags, PF_PLAYER_MOVED))
+        NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Run);
+    else
+        NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Stand);
+}
+
+void
+DoPlayerRun(PLAYERp pp)
+{
+    USERp u = User[pp->PlayerSprite];
+
+    if (pp->cursectnum >= 0 && SectorIsUnderwaterArea(pp->cursectnum))
+    {
+        DoPlayerBeginDiveNoWarp(pp);
+        return;
+    }
+
+    // Crawl if in small aread automatically
+    if (DoPlayerTestCrawl(pp))
+    {
+        DoPlayerBeginCrawl(pp);
+        return;
+    }
+
+    // Crawl Commanded
+    if (TEST_SYNC_KEY(pp, SK_CRAWL))
+    {
+        DoPlayerBeginCrawl(pp);
+        return;
+    }
+
+    // Jump
+    if (TEST_SYNC_KEY(pp, SK_JUMP))
+    {
+        if (FLAG_KEY_PRESSED(pp, SK_JUMP))
+        {
+            FLAG_KEY_RELEASE(pp, SK_JUMP);
+            // make sure you stand at full heights for jumps/double jumps
+            //DoPlayerHeight(pp);
+            //DoPlayerHeight(pp);
+            //DoPlayerHeight(pp);
+            //DoPlayerHeight(pp);
+            //DoPlayerHeight(pp);
+            pp->posz = pp->loz - PLAYER_HEIGHT;
+            DoPlayerBeginJump(pp);
+            return;
+        }
+    }
+    else
+    {
+        FLAG_KEY_RESET(pp, SK_JUMP);
+    }
+
+    // Crawl lock
+    // if (KEY_PRESSED(KEYSC_NUM))
+    if (TEST_SYNC_KEY(pp, SK_CRAWL_LOCK))
+    {
+        if (FLAG_KEY_PRESSED(pp, SK_CRAWL_LOCK))
+        {
+            FLAG_KEY_RELEASE(pp, SK_CRAWL_LOCK);
+            SET(pp->Flags, PF_LOCK_CRAWL);
+            DoPlayerBeginCrawl(pp);
+            return;
+        }
+    }
+    else
+    {
+        FLAG_KEY_RESET(pp, SK_CRAWL_LOCK);
+    }
+
+    if (PlayerFlyKey())
+    {
+        //pp->InventoryTics[INVENTORY_FLY] = -99;
+        DoPlayerBeginFly(pp);
+        return;
+    }
+
+    if (DebugOperate)
+    {
+        if (!TEST(pp->Flags, PF_DEAD) && !Prediction)
+        {
+            if (TEST_SYNC_KEY(pp, SK_OPERATE))
+            {
+                if (FLAG_KEY_PRESSED(pp, SK_OPERATE) && pp->cursectnum >= 0)
+                {
+                    if (TEST(sector[pp->cursectnum].extra, SECTFX_OPERATIONAL))
+                    {
+                        FLAG_KEY_RELEASE(pp, SK_OPERATE);
+                        DoPlayerBeginOperate(pp);
+                        return;
+                    }
+                    else if (TEST(sector[pp->cursectnum].extra, SECTFX_TRIGGER))
+                    {
+                        SPRITEp sp;
+
+                        sp = FindNearSprite(pp->SpriteP, STAT_TRIGGER);
+                        if (sp && SP_TAG5(sp) == TRIGGER_TYPE_REMOTE_SO)
+                        {
+                            pp->remote_sprite = sp;
+                            FLAG_KEY_RELEASE(pp, SK_OPERATE);
+                            ASSERT(pp->remote_sprite);
+                            DoPlayerBeginRemoteOperate(pp, &SectorObject[SP_TAG7(pp->remote_sprite)]);
+                            return;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                FLAG_KEY_RESET(pp, SK_OPERATE);
+            }
+        }
+    }
+
+    DoPlayerBob(pp);
+
+    if (pp->WadeDepth)
+    {
+        DoPlayerBeginWade(pp);
+        return;
+    }
+
+
+    // If moving forward and tag is a ladder start climbing
+    if (PlayerOnLadder(pp))
+    {
+        DoPlayerBeginClimb(pp);
+        return;
+    }
+
+    // Move about
+    DoPlayerMove(pp);
+
+    if (u->Rot != sg_PlayerNinjaSword && u->Rot != sg_PlayerNinjaPunch)
+    {
+        if (TEST(pp->Flags, PF_PLAYER_MOVED))
+        {
+            if (u->Rot != u->ActorActionSet->Run)
+                NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Run);
+        }
+        else
+        {
+            if (u->Rot != u->ActorActionSet->Stand)
+                NewStateGroup(pp->PlayerSprite, u->ActorActionSet->Stand);
+        }
+    }
+
+    // If the floor is far below you, fall hard instead of adjusting height
+    if (PlayerFallTest(pp, PLAYER_HEIGHT))
+    {
+        pp->jump_speed = Z(1);
+        DoPlayerBeginFall(pp);
+        // call PlayerFall now seems to iron out a hitch before falling
+        DoPlayerFall(pp);
+        return;
+    }
+
+    if (TEST(sector[pp->cursectnum].extra, SECTFX_DYNAMIC_AREA))
+    {
+        pp->posz = pp->loz - PLAYER_HEIGHT;
+    }
+
+    // Adjust height moving up and down sectors
+    DoPlayerHeight(pp);
+}
+
+
+int
+PlayerStateControl(int16_t SpriteNum)
+{
+    USERp u;
+
+    // Convienience var
+    u = User[SpriteNum];
+
+    u->Tics += synctics;
+
+    // Skip states if too much time has passed
+    while (u->Tics >= TEST(u->State->Tics, SF_TICS_MASK))
+    {
+
+        // Set Tics
+        u->Tics -= TEST(u->State->Tics, SF_TICS_MASK);
+
+        // Transition to the next state
+        u->State = u->State->NextState;
+
+        // !JIM! Added this so I can do quick calls in player states!
+        // Need this in order for floor blood and footprints to not get called more than once.
+        while (TEST(u->State->Tics, SF_QUICK_CALL))
+        {
+            // Call it once and go to the next state
+            (*u->State->Animator)(SpriteNum);
+
+            // if still on the same QUICK_CALL should you
+            // go to the next state.
+            if (TEST(u->State->Tics, SF_QUICK_CALL))
+                u->State = u->State->NextState;
+        }
+
+        if (!u->State->Pic)
+        {
+            NewStateGroup(SpriteNum, (STATEp *) u->State->NextState);
+        }
+    }
+
+    // Set picnum to the correct pic
+    //sprite[SpriteNum].picnum = u->State->Pic;
+    if (u->RotNum > 1)
+        sprite[SpriteNum].picnum = u->Rot[0]->Pic;
+    else
+        sprite[SpriteNum].picnum = u->State->Pic;
+
+    // Call the correct animator
+    if (TEST(u->State->Tics, SF_PLAYER_FUNC))
+        if (u->State->Animator)
+            (*u->State->Animator)(SpriteNum);
+
+    return 0;
+}
+
+void
+MoveSkipSavePos(void)
+{
+    SPRITEp sp;
+    USERp u;
+    short i,nexti;
+    short pnum;
+    PLAYERp pp;
+
+    MoveSkip8 = (MoveSkip8 + 1) & 7;
+    MoveSkip4 = (MoveSkip4 + 1) & 3;
+    MoveSkip2 ^= 1;
+
+    // Save off player
+    TRAVERSE_CONNECT(pnum)
+    {
+        pp = Player + pnum;
+
+        pp->oposx = pp->posx;
+        pp->oposy = pp->posy;
+        pp->oposz = pp->posz;
+        pp->oq16ang = pp->q16ang;
+        pp->oq16horiz = pp->q16horiz;
+        pp->obob_z = pp->bob_z;
+    }
+
+    // save off stats for skip4
+    if (MoveSkip4 == 0)
+    {
+        short stat;
+
+        for (stat = STAT_SKIP4_START; stat <= STAT_SKIP4_INTERP_END; stat++)
+        {
+            TRAVERSE_SPRITE_STAT(headspritestat[stat], i, nexti)
+            {
+                sp = &sprite[i];
+                u = User[i];
+
+                u->ox = sp->x;
+                u->oy = sp->y;
+                u->oz = sp->z;
+            }
+        }
+    }
+
+    // save off stats for skip2
+    if (MoveSkip2 == 0)
+    {
+        short stat;
+
+        for (stat = STAT_SKIP2_START; stat <= STAT_SKIP2_INTERP_END; stat++)
+        {
+            TRAVERSE_SPRITE_STAT(headspritestat[stat], i, nexti)
+            {
+                sp = &sprite[i];
+                u = User[i];
+
+                u->ox = sp->x;
+                u->oy = sp->y;
+                u->oz = sp->z;
+            }
+        }
+    }
+}
+
+
+void PlayerTimers(PLAYERp pp)
+{
+    InventoryTimer(pp);
+}
+
+void ChopsCheck(PLAYERp pp)
+{
+    extern SWBOOL HelpInputMode;
+    extern int ChopTics;
+
+    if (!UsingMenus && !HelpInputMode && !TEST(pp->Flags, PF_DEAD) && !pp->sop_riding && numplayers <= 1)
+    {
+        if ((pp->input.bits|pp->input.vel|pp->input.svel|pp->input.q16angvel|pp->input.q16aimvel) ||
+            TEST(pp->Flags, PF_CLIMBING|PF_FALLING|PF_DIVING))
+        {
+            // Hit a input key or other reason to stop chops
+            //if (pp->Chops && pp->Chops->State != pp->Chops->State->RetractState)
+            if (pp->Chops)
+            {
+                if (!pp->sop_control) // specail case
+                    RESET(pp->Flags, PF_WEAPON_DOWN);
+                ChopsSetRetract(pp);
+            }
+            ChopTics = 0;
+        }
+        else
+        {
+            ChopTics += synctics;
+            if (!pp->Chops)
+            {
+                // Chops not up
+                if (ChopTics > 30*120)
+                {
+                    ChopTics = 0;
+                    // take weapon down
+                    SET(pp->Flags, PF_WEAPON_DOWN);
+                    InitChops(pp);
+                }
+            }
+            else
+            {
+                // Chops already up
+                if (ChopTics > 30*120)
+                {
+                    ChopTics = 0;
+                    // bring weapon back up
+                    RESET(pp->Flags, PF_WEAPON_DOWN);
+                    ChopsSetRetract(pp);
+                }
+            }
+        }
+    }
+}
+
+void PlayerGlobal(PLAYERp pp)
+{
+    // This is the place for things that effect the player no matter what hes
+    // doing
+
+
+    PlayerTimers(pp);
+
+    if (TEST(pp->Flags, PF_RECOIL))
+        DoPlayerRecoil(pp);
+
+    if (!TEST(pp->Flags, PF_CLIP_CHEAT))
+    {
+        if (pp->hi_sectp && pp->lo_sectp)
+        {
+            int min_height;
+
+#if 0
+            if (TEST(pp->Flags, PF_JUMPING))
+                // this is a special case for jumping.  Jumps have a very small
+                // z height for the box so players can jump into small areas.
+                min_height = PLAYER_MIN_HEIGHT_JUMP;
+            else
+                min_height = PLAYER_MIN_HEIGHT;
+#else
+            // just adjusted min height to something small to take care of all cases
+            min_height = PLAYER_MIN_HEIGHT;
+#endif
+
+            if (labs(pp->loz - pp->hiz) < min_height)
+            {
+                if (!TEST(pp->Flags, PF_DEAD))
+                {
+                    ////DSPRINTF(ds,"Squish diff %d, min %d, cz %d, fz %d, lo %d, hi %d",labs(pp->loz - pp->hiz)>>8,min_height>>8, pp->ceiling_dist>>8, pp->floor_dist>>8,pp->lo_sectp-sector,pp->hi_sectp-sector);
+                    //MONO_PRINT(ds);
+                    PlayerUpdateHealth(pp, -User[pp->PlayerSprite]->Health);  // Make sure he dies!
+                    PlayerCheckDeath(pp, -1);
+
+                    if (TEST(pp->Flags, PF_DEAD))
+                        return;
+                }
+            }
+        }
+    }
+
+    if (pp->FadeAmt > 0 && MoveSkip4 == 0)
+    {
+        DoPaletteFlash(pp);
+    }
+
+    // camera stuff that can't be done in drawscreen
+    if (pp->circle_camera_dist > CIRCLE_CAMERA_DIST_MIN)
+        pp->circle_camera_ang = NORM_ANGLE(pp->circle_camera_ang + 14);
+
+    if (pp->camera_check_time_delay > 0)
+    {
+        pp->camera_check_time_delay -= synctics;
+        if (pp->camera_check_time_delay <= 0)
+            pp->camera_check_time_delay = 0;
+    }
+}
+
+
+void UpdateScrollingMessages(void)
+{
+    short i;
+
+    // Update the scrolling multiplayer messages
+    for (i=0; i<MAXUSERQUOTES; i++)
+    {
+        if (user_quote_time[i])
+        {
+            user_quote_time[i]--;
+
+            if (user_quote_time[i] <= 0)
+            {
+                SetRedrawScreen(Player + myconnectindex);
+                user_quote_time[i] = 0;
+            }
+            //if (!user_quote_time[i]) pub = NUMPAGES;
+        }
+    }
+
+    if (gs.BorderNum > BORDER_BAR+1)
+    {
+        quotebot = quotebotgoal;
+    }
+    else
+    {
+        //     if ((klabs(quotebotgoal-quotebot) <= 16) && gs.BorderNum < BORDER_NONE+2)
+        if ((klabs(quotebotgoal-quotebot) <= 16))
+            quotebot += ksgn(quotebotgoal-quotebot);
+        else
+            quotebot = quotebotgoal;
+    }
+}
+
+void UpdateConMessages(void)
+{
+    if (!ConInputMode) return;
+
+    if ((klabs(conbotgoal-conbot) <= 12))
+        conbot += ksgn(conbotgoal-conbot);
+    else
+        conbot = conbotgoal;
+}
+
+void MultiPlayLimits(void)
+{
+    short pnum;
+    PLAYERp pp;
+    SWBOOL Done = FALSE;
+
+    if (ExitLevel)
+        return;
+
+    if (gNet.MultiGameType != MULTI_GAME_COMMBAT)
+        return;
+
+    if (gNet.KillLimit)
+    {
+        TRAVERSE_CONNECT(pnum)
+        {
+            pp = Player + pnum;
+            if (pp->Kills >= gNet.KillLimit)
+            {
+                Done = TRUE;
+            }
+        }
+    }
+
+    if (gNet.TimeLimit)
+    {
+        gNet.TimeLimitClock -= synctics;
+
+        if ((gNet.TimeLimitClock%120) <= 3)
+        {
+            PlayerUpdateTimeLimit(Player + screenpeek);
+        }
+
+        if (gNet.TimeLimitClock <= 0)
+            Done = TRUE;
+    }
+
+    if (Done)
+    {
+        gNet.TimeLimitClock = gNet.TimeLimit;
+
+        // do not increment if level is 23 thru 28
+        if (Level <= 22)
+            Level++;
+
+        ExitLevel = TRUE;
+        FinishedLevel = TRUE;
+    }
+}
+
+void PauseMultiPlay(void)
+{
+    static SWBOOL SavePrediction;
+    PLAYERp pp;
+    short pnum,p;
+
+    // check for pause of multi-play game
+    TRAVERSE_CONNECT(pnum)
+    {
+        pp = Player + pnum;
+
+        if (TEST_SYNC_KEY(pp, SK_PAUSE))
+        {
+            if (FLAG_KEY_PRESSED(pp, SK_PAUSE))
+            {
+                FLAG_KEY_RELEASE(pp, SK_PAUSE);
+
+                GamePaused ^= 1;
+
+                if (GamePaused)
+                {
+                    short w,h;
+#define MSG_GAME_PAUSED "Game Paused"
+                    MNU_MeasureString(MSG_GAME_PAUSED, &w, &h);
+
+                    TRAVERSE_CONNECT(p)
+                    PutStringTimer(Player + p, TEXT_TEST_COL(w), 100, MSG_GAME_PAUSED, 999);
+
+                    SavePrediction = PredictionOn;
+                    PredictionOn = FALSE;
+                    MUSIC_Pause();
+                }
+                else
+                {
+                    PredictionOn = SavePrediction;
+                    MUSIC_Continue();
+                    TRAVERSE_CONNECT(p)
+                    pClearTextLine(Player + p, 100);
+                }
+            }
+        }
+        else
+        {
+            FLAG_KEY_RESET(pp, SK_PAUSE);
+        }
+    }
+}
+
+void
+domovethings(void)
+{
+    extern SWBOOL DebugAnim;
+#if DEBUG
+    extern SWBOOL DebugPanel;
+#endif
+    extern SWBOOL DebugSector;
+    extern SWBOOL DebugActorFreeze;
+    extern int PlayClock;
+    short i, pnum;
+    int WeaponOperate(PLAYERp pp);
+    PLAYERp pp;
+    SWBOOL MyCommPlayerQuit(void);
+    extern unsigned int MoveThingsCount;
+    extern int FinishTimer;
+
+
+    // grab values stored in the fifo and put them in the players vars
+    TRAVERSE_CONNECT(i)
+    {
+        pp = Player + i;
+        pp->input = pp->inputfifo[movefifoplc & (MOVEFIFOSIZ - 1)];
+    }
+    movefifoplc++;
+
+    if (MyCommPlayerQuit())
+        return;
+
+    UpdateScrollingMessages();  // Update the multiplayer type messages
+    UpdateConMessages();    // Update the console messages
+
+#if SYNC_TEST
+#ifndef DEBUG                            // in DEBUG mode even TEN does sync all the time
+    if (/* CTW REMOVED !gTenActivated ||*/ !(movefifoplc & 0x3f))
+#endif
+        getsyncstat();
+#endif
+
+    // count the number of times this loop is called and use
+    // for things like sync testing
+    MoveThingsCount++;
+
+    //RTS_Keys();
+
+    // recording is done here
+    if (DemoRecording)
+    {
+        TRAVERSE_CONNECT(i)
+        {
+            pp = Player + i;
+
+            DemoBuffer[DemoRecCnt] = pp->input;
+
+            if (DemoDebugMode)
+            {
+                DemoRecCnt++;
+                if (DemoRecCnt > DemoDebugBufferMax-1)
+                {
+                    DemoDebugWrite();
+                    DemoRecCnt = 0;
+                }
+            }
+            else
+            {
+                DemoRecCnt++;
+                if (DemoRecCnt > DEMO_BUFFER_MAX-1)
+                {
+                    DemoWriteBuffer();
+                    DemoRecCnt = 0;
+                }
+            }
+        }
+    }
+
+    totalsynctics += synctics;
+
+    updateinterpolations();                  // Stick at beginning of domovethings
+    short_updateinterpolations();            // Stick at beginning of domovethings
+    so_updateinterpolations();               // Stick at beginning of domovethings
+    MoveSkipSavePos();
+
+#if 0
+    {
+        extern SWBOOL PauseKeySet;
+        if (KEY_PRESSED(KEYSC_F5) && !(KEY_PRESSED(KEYSC_ALT) || KEY_PRESSED(KEYSC_RALT)) && !PauseKeySet)
+        {
+            KEY_PRESSED(KEYSC_F5) = 0;
+            ResChange();
         }
     }
 #endif
 
-    if (P_DoCounters(playerNum))
-        return;
 
-    P_ProcessWeapon(playerNum);
+#if 0 // has been moved to draw code
+    extern SWBOOL ResCheat;
+    if (ResCheat)
+    {
+        ResCheat = FALSE;
+        ResChange();
+    }
+#endif
+
+    // check for pause of multi-play game
+    if (CommEnabled)
+        PauseMultiPlay();
+
+    TRAVERSE_CONNECT(pnum)
+    {
+        pp = Player + pnum;
+        DoPlayerMenuKeys(pp);
+    }
+
+    if (GamePaused)
+    {
+        if (!ReloadPrompt)
+            return;
+    }
+
+    PlayClock += synctics;
+
+    if (!DebugAnim)
+        if (!DebugActorFreeze)
+            DoAnim(synctics);
+
+    // should pass pnum and use syncbits
+    if (!DebugSector)
+        DoSector();
+
+    ProcessVisOn();
+    if (MoveSkip4 == 0)
+    {
+        ProcessQuakeOn();
+        ProcessQuakeSpot();
+        JS_ProcessEchoSpot();
+    }
+
+    SpriteControl();
+
+    TRAVERSE_CONNECT(pnum)
+    {
+        extern short screenpeek;
+        extern SWBOOL PlayerTrackingMode;
+        void pSpriteControl(PLAYERp pp);
+        extern PLAYERp GlobPlayerP;
+
+        pp = Player + pnum;
+        GlobPlayerP = pp;
+
+        // auto tracking mode for single player multi-game
+        if (numplayers <= 1 && PlayerTrackingMode && pnum == screenpeek && screenpeek != myconnectindex)
+        {
+            Player[screenpeek].camq16ang = Player[screenpeek].q16ang = fix16_from_int(getangle(Player[myconnectindex].posx - Player[screenpeek].posx, Player[myconnectindex].posy - Player[screenpeek].posy));
+        }
+
+        if (!TEST(pp->Flags, PF_DEAD))
+        {
+#if DEBUG
+            if (!DebugPanel)
+                WeaponOperate(pp);
+            if (!DebugSector)
+                PlayerOperateEnv(pp);
+#else
+            WeaponOperate(pp);
+            PlayerOperateEnv(pp);
+#endif
+        }
+
+        // do for moving sectors
+        DoPlayerSectorUpdatePreMove(pp);
+        ChopsCheck(pp);
+
+        // Reset flags used while tying input to framerate
+        auto prevFlags2 = pp->Flags2;
+        RESET(pp->Flags2, PF2_INPUT_CAN_TURN|PF2_INPUT_CAN_AIM);
+//        extern SWBOOL ScrollMode2D;
+        //if (!ScrollMode2D)
+        (*pp->DoPlayerAction)(pp);
+
+        // Fix a possible jitter upon player action change;
+        // Mostly done in order to force updates to oq16ang/oq16horiz.
+        // Don't do so for a dead player which may follow
+        // the killer if present, due to angle interpolation.
+        if (!PedanticMode && !TEST(pp->Flags, PF_DEAD))
+        {
+            auto currFlags2 = pp->Flags2;
+            if (prevFlags2 & currFlags2 & PF2_INPUT_CAN_TURN)
+                DoPlayerTurn(pp, &pp->q16ang, 0);
+            if (prevFlags2 & currFlags2 & PF2_INPUT_CAN_AIM)
+                DoPlayerHorizon(pp, &pp->q16horiz, 0);
+            pp->Flags2 = currFlags2;
+        }
+        UpdatePlayerSprite(pp);
+
+#if DEBUG
+        if (!DebugPanel)
+#endif
+        pSpriteControl(pp);
+
+        PlayerStateControl(pp->PlayerSprite);
+
+        DoPlayerSectorUpdatePostMove(pp);
+        PlayerGlobal(pp);
+    }
+
+
+    MultiPlayLimits();
+
+    if (MoveSkip8 == 0)     // 8=5x 4=10x, 2=20x, 0=40x per second
+        DoUpdateSounds3D();
+
+    CorrectPrediction(movefifoplc - 1);
+
+    if (FinishTimer)
+    {
+        if ((FinishTimer -= synctics) <= 0)
+        {
+            FinishTimer = 0;
+            ExitLevel = TRUE;
+            FinishedLevel = TRUE;
+        }
+    }
+
+
+    //if (DemoSyncRecord && !DemoPlaying)
+    //    demosync_record();
 }
 
 
-#include "sjson.h"
+extern unsigned char palette_data[256][3];      // Global palette array
 
-int portableBackupSave(const char * path, const char * name, int volume, int level)
+void
+InitAllPlayers(void)
 {
-    if (!FURY)
-        return 0;
+    PLAYERp pp;
+    PLAYERp pfirst = Player;
+    int i;
+    extern SWBOOL NewGame;
+    //int fz,cz;
 
-    char fn[BMAX_PATH];
+    //getzsofslope(pfirst->cursectnum, pfirst->posx, pfirst->posy, &cz, &fz);
+    //pfirst->posz = fz - PLAYER_HEIGHT;
+    pfirst->q16horiz = pfirst->q16horizbase = fix16_from_int(100);
 
-    if (G_ModDirSnprintf(fn, sizeof(fn), "%s.ext", path))
+    // Initialize all [MAX_SW_PLAYERS] arrays here!
+    for (pp = Player; pp < &Player[MAX_SW_PLAYERS]; pp++)
     {
-        return 1;
-    }
+        pp->posx = pp->oposx = pfirst->posx;
+        pp->posy = pp->oposy = pfirst->posy;
+        pp->posz = pp->oposz = pfirst->posz;
+        pp->camq16ang = pp->q16ang = pp->oq16ang = pfirst->q16ang;
+        pp->camq16horiz = pp->q16horiz = pp->oq16horiz = pfirst->q16horiz;
+        pp->cursectnum = pfirst->cursectnum;
+        // set like this so that player can trigger something on start of the level
+        pp->lastcursectnum = pfirst->cursectnum+1;
 
-    sjson_context * ctx = sjson_create_context(0, 0, NULL);
-    if (!ctx)
-    {
-        buildprint("Could not create sjson_context\n");
-        return 1;
-    }
+        //pp->MaxHealth = 100;
 
-    sjson_node * root = sjson_mkobject(ctx);
+        pp->q16horizbase = pfirst->q16horizbase;
+        pp->oldposx = 0;
+        pp->oldposy = 0;
+        pp->climb_ndx = 10;
+        pp->Killer = -1;
+        pp->Kills = 0;
+        pp->bcnt = 0;
+        pp->UziShellLeftAlt = 0;
+        pp->UziShellRightAlt = 0;
 
-    sjson_put_string(ctx, root, "name", name);
-    // sjson_put_string(ctx, root, "map", currentboardfilename);
-    sjson_put_int(ctx, root, "volume", volume);
-    sjson_put_int(ctx, root, "level", level);
-    sjson_put_int(ctx, root, "skill", ud.player_skill);
+        pp->ceiling_dist = PLAYER_RUN_CEILING_DIST;
+        pp->floor_dist = PLAYER_RUN_FLOOR_DIST;
 
-    {
-        sjson_node * players = sjson_mkarray(ctx);
-        sjson_append_member(ctx, root, "players", players);
+        pp->WpnGotOnceFlags = 0;
+        pp->DoPlayerAction = DoPlayerBeginRun;
+        pp->KeyPressFlags = 0xFFFFFFFF;
+        memset(pp->KilledPlayer,0,sizeof(pp->KilledPlayer));
 
-        for (int TRAVERSE_CONNECT(p))
+        if (NewGame)
         {
-            playerdata_t const * playerData = &g_player[p];
-            DukePlayer_t const * ps = playerData->ps;
-            auto pSprite = (uspritetype const *)&sprite[ps->i];
-
-            sjson_node * player = sjson_mkobject(ctx);
-            sjson_append_element(players, player);
-
-            sjson_put_int(ctx, player, "extra", pSprite->extra);
-            sjson_put_int(ctx, player, "max_player_health", ps->max_player_health);
-
-            sjson_node * gotweapon = sjson_put_array(ctx, player, "gotweapon");
-            for (int w = 0; w < MAX_WEAPONS; ++w)
-                sjson_append_element(gotweapon, sjson_mkbool(ctx, !!(ps->gotweapon & (1<<w))));
-
-            sjson_put_int16s(ctx, player, "ammo_amount", ps->ammo_amount, MAX_WEAPONS);
-            sjson_put_int16s(ctx, player, "max_ammo_amount", ps->max_ammo_amount, MAX_WEAPONS);
-            sjson_put_int16s(ctx, player, "inv_amount", ps->inv_amount, GET_MAX);
-
-            sjson_put_int(ctx, player, "max_shield_amount", ps->max_shield_amount);
-
-            sjson_put_int(ctx, player, "curr_weapon", ps->curr_weapon);
-            sjson_put_int(ctx, player, "subweapon", ps->subweapon);
-            sjson_put_int(ctx, player, "inven_icon", ps->inven_icon);
-
-            sjson_node* vars = sjson_mkobject(ctx);
-            sjson_append_member(ctx, player, "vars", vars);
-
-            for (int j=0; j<g_gameVarCount; j++)
+            for (i = 0; i < MAX_INVENTORY; i++)
             {
-                gamevar_t & var = aGameVars[j];
+                //pp->InventoryAmount[i] = InventoryData[i].MaxInv = 0;
+                pp->InventoryAmount[i] = 0;
+                pp->InventoryPercent[i] = 0;
+            }
+        }
 
-                if (!(var.flags & GAMEVAR_SERIALIZE))
-                    continue;
+        // My palette flashing stuff
+        pp->FadeAmt = 0;
+        pp->FadeTics = 0;
+        pp->StartColor = 0;
+        pp->q16horizoff = 0;
+        memcpy(&pp->temp_pal[0],&palette_data[0][0],768);
 
-                if ((var.flags & (GAMEVAR_PERPLAYER|GAMEVAR_PERACTOR)) != GAMEVAR_PERPLAYER)
-                    continue;
+        INITLIST(&pp->PanelSpriteList);
+    }
+}
 
-                sjson_put_int(ctx, vars, var.szLabel, Gv_GetVar(j, ps->i, p));
+int SearchSpawnPosition(PLAYERp pp)
+{
+    PLAYERp opp; // other player
+    SPRITEp sp;
+    short pos_num;
+    short pnum,spawn_sprite;
+    SWBOOL blocked;
+
+    do
+    {
+        // get a spawn position
+        pos_num = RANDOM_RANGE(MAX_SW_PLAYERS);
+        spawn_sprite = headspritestat[STAT_MULTI_START + pos_num];
+        if (spawn_sprite <= -1)
+            return 0;
+
+        sp = &sprite[spawn_sprite];
+
+        blocked = FALSE;
+
+        // check to see if anyone else is blocking this spot
+        TRAVERSE_CONNECT(pnum)
+        {
+            opp = &Player[pnum];
+
+            if (opp != pp)  // don't test for yourself
+            {
+                if (FindDistance3D(sp->x - opp->posx, sp->y - opp->posy, sp->z - opp->posz) < 1000)
+                {
+                    blocked = TRUE;
+                    break;
+                }
+            }
+        }
+    }
+    while (blocked);
+
+    return pos_num;
+}
+
+SWBOOL SpawnPositionUsed[MAX_SW_PLAYERS_REG+1];
+
+void
+PlayerSpawnPosition(PLAYERp pp)
+{
+    SPRITEp sp;
+    short pnum = pp - Player;
+    short spawn_sprite = 0, pos_num = pnum;
+    int fz,cz;
+    int i;
+
+    // find the first unused spawn position
+    // garauntees that the spawn pos 0 will be used
+    // Note: This code is not used if the player is DEAD and respawning
+
+    for (i = 0; i < MAX_SW_PLAYERS; i++)
+    {
+        if (!SpawnPositionUsed[i])
+        {
+            pos_num = i;
+            break;
+        }
+    }
+
+    // need to call this routine BEFORE resetting DEATH flag
+
+    switch (gNet.MultiGameType)
+    {
+    case MULTI_GAME_NONE:
+        // start from the beginning
+        spawn_sprite = headspritestat[STAT_MULTI_START + 0];
+        break;
+    case MULTI_GAME_COMMBAT:
+    case MULTI_GAME_AI_BOTS:
+        // start from random position after death
+        if (TEST(pp->Flags, PF_DEAD))
+        {
+            pos_num = SearchSpawnPosition(pp);
+        }
+
+        spawn_sprite = headspritestat[STAT_MULTI_START + pos_num];
+        break;
+    case MULTI_GAME_COOPERATIVE:
+        // start your assigned spot
+        spawn_sprite = headspritestat[STAT_CO_OP_START + pos_num];
+        break;
+    }
+
+    SpawnPositionUsed[pos_num] = TRUE;
+
+    if (spawn_sprite < 0)
+    {
+        spawn_sprite = headspritestat[STAT_MULTI_START + 0];
+        //TerminateGame();
+        //printf("Map does not contain a spawn position for Player %d.", pp - Player);
+        //exit(0);
+    }
+
+    ASSERT(spawn_sprite >= 0);
+
+    sp = &sprite[spawn_sprite];
+
+
+    pp->posx = pp->oposx = sp->x;
+    pp->posy = pp->oposy = sp->y;
+    pp->posz = pp->oposz = sp->z;
+    pp->camq16ang = pp->q16ang = pp->oq16ang = fix16_from_int(sp->ang);
+    pp->cursectnum = sp->sectnum;
+
+    getzsofslope(pp->cursectnum, pp->posx, pp->posy, &cz, &fz);
+    // if too close to the floor - stand up
+    if (pp->posz > fz - PLAYER_HEIGHT)
+    {
+        pp->posz = pp->oposz = fz - PLAYER_HEIGHT;
+    }
+}
+
+
+void
+InitMultiPlayerInfo(void)
+{
+    PLAYERp pp;
+    SPRITEp sp;
+    short pnum, start0;
+    unsigned stat;
+    short SpriteNum, NextSprite, tag;
+    static short MultiStatList[] =
+    {
+        STAT_MULTI_START,
+        STAT_CO_OP_START
+    };
+
+    // this routine is called before SpriteSetup - process start positions NOW
+    TRAVERSE_SPRITE_STAT(headspritestat[0], SpriteNum, NextSprite)
+    {
+        sp = &sprite[SpriteNum];
+
+        tag = sp->hitag;
+
+        if (sp->picnum == ST1)
+        {
+            switch (tag)
+            {
+            case MULTI_PLAYER_START:
+                change_sprite_stat(SpriteNum, STAT_MULTI_START + sp->lotag);
+                break;
+            case MULTI_COOPERATIVE_START:
+                change_sprite_stat(SpriteNum, STAT_CO_OP_START + sp->lotag);
+                break;
             }
         }
     }
 
+    // set up the zero starting positions - its not saved in the map as a ST1 sprite
+    // like the others
+    pp = Player;
+    for (stat = 0; stat < SIZ(MultiStatList); stat++)
     {
-        sjson_node * vars = sjson_mkobject(ctx);
-        sjson_append_member(ctx, root, "vars", vars);
-
-        for (int j=0; j<g_gameVarCount; j++)
+        if (gNet.MultiGameType != MULTI_GAME_NONE)
         {
-            gamevar_t & var = aGameVars[j];
-
-            if (!(var.flags & GAMEVAR_SERIALIZE))
+            // if start position is physically set then don't spawn a new one
+            if (headspritestat[MultiStatList[stat] + 0] >= 0)
                 continue;
+        }
 
-            if (var.flags & (GAMEVAR_PERPLAYER|GAMEVAR_PERACTOR))
-                continue;
+        start0 = SpawnSprite(MultiStatList[stat], ST1, NULL, pp->cursectnum, pp->posx, pp->posy, pp->posz, fix16_to_int(pp->q16ang), 0);
+        ASSERT(start0 >= 0);
+        if (User[start0])
+        {
+            FreeMem(User[start0]);
+            User[start0] = NULL;
+        }
+        sprite[start0].picnum = ST1;
+    }
 
-            sjson_put_int(ctx, vars, var.szLabel, Gv_GetVar(j));
+    memset(SpawnPositionUsed,0,sizeof(SpawnPositionUsed));
+
+    // Initialize multi player positions here
+    //for (pp = Player; pp < Player + numplayers; pp++)
+    TRAVERSE_CONNECT(pnum)
+    {
+        pp = Player + pnum;
+        switch (gNet.MultiGameType)
+        {
+        case MULTI_GAME_NONE:
+            PlayerSpawnPosition(pp);
+            break;
+        //return;
+        case MULTI_GAME_COMMBAT:
+        case MULTI_GAME_AI_BOTS:
+            // there are no keys in deathmatch play
+            memset(Player[0].HasKey,0xFFFF,sizeof(Player[0].HasKey));
+            memset(pp->HasKey,0xFFFF,sizeof(pp->HasKey));
+            PlayerSpawnPosition(pp);
+            break;
+        case MULTI_GAME_COOPERATIVE:
+            PlayerSpawnPosition(pp);
+            break;
+        }
+    }
+}
+
+// If player stepped in something gooey, track it all over the place.
+int
+DoFootPrints(short SpriteNum)
+{
+    USERp u = User[SpriteNum];
+
+    if (u->PlayerP)
+    {
+        if (u->PlayerP->cursectnum < 0)
+            return 0;
+
+        if (FAF_ConnectArea(u->PlayerP->cursectnum))
+            return 0;
+
+        if (u->PlayerP->NumFootPrints > 0)
+        {
+            QueueFootPrint(SpriteNum);
         }
     }
 
-    char errmsg[256];
-    if (!sjson_check(root, errmsg))
-    {
-        buildprint(errmsg, "\n");
-        sjson_destroy_context(ctx);
-        return 1;
-    }
-
-    char * encoded = sjson_stringify(ctx, root, "  ");
-
-    buildvfs_FILE fil = buildvfs_fopen_write(fn);
-    if (!fil)
-    {
-        sjson_destroy_context(ctx);
-        return 1;
-    }
-
-    buildvfs_fwrite(encoded, strlen(encoded), 1, fil);
-    buildvfs_fclose(fil);
-
-    sjson_free_string(ctx, encoded);
-    sjson_destroy_context(ctx);
-
     return 0;
 }
+
+void CheckFootPrints(PLAYERp pp)
+{
+    if (pp->NumFootPrints <= 0 || FootMode != WATER_FOOT)
+    {
+        // Hey, you just got your feet wet!
+        pp->NumFootPrints = RANDOM_RANGE(10)+3;
+        FootMode = WATER_FOOT;
+    }
+}
+
+
+#include "saveable.h"
+
+static saveable_code saveable_player_code[] =
+{
+    SAVE_CODE(DoPlayerSlide),
+    //SAVE_CODE(DoPlayerBeginSwim),
+    //SAVE_CODE(DoPlayerSwim),
+    SAVE_CODE(DoPlayerWade),
+    SAVE_CODE(DoPlayerBeginWade),
+    SAVE_CODE(DoPlayerBeginCrawl),
+    SAVE_CODE(DoPlayerCrawl),
+    SAVE_CODE(DoPlayerRun),
+    SAVE_CODE(DoPlayerBeginRun),
+    SAVE_CODE(DoPlayerFall),
+    SAVE_CODE(DoPlayerBeginFall),
+    SAVE_CODE(DoPlayerJump),
+    SAVE_CODE(DoPlayerBeginJump),
+    SAVE_CODE(DoPlayerForceJump),
+    SAVE_CODE(DoPlayerBeginFly),
+    SAVE_CODE(DoPlayerFly),
+    SAVE_CODE(DoPlayerBeginClimb),
+    SAVE_CODE(DoPlayerClimb),
+    SAVE_CODE(DoPlayerBeginDie),
+    //SAVE_CODE(DoPlayerDie),
+    SAVE_CODE(DoPlayerBeginOperateBoat),
+    SAVE_CODE(DoPlayerBeginOperateTank),
+    SAVE_CODE(DoPlayerBeginOperate),
+    SAVE_CODE(DoPlayerOperateBoat),
+    SAVE_CODE(DoPlayerOperateTank),
+    SAVE_CODE(DoPlayerOperateTurret),
+    SAVE_CODE(DoPlayerBeginDive),
+    SAVE_CODE(DoPlayerDive),
+    SAVE_CODE(DoPlayerTeleportPause),
+    SAVE_CODE(DoPlayerTestCrawl),
+    SAVE_CODE(DoPlayerDeathFlip),
+    SAVE_CODE(DoPlayerDeathCrumble),
+    SAVE_CODE(DoPlayerDeathExplode),
+    SAVE_CODE(DoPlayerDeathFall),
+    SAVE_CODE(DoPlayerBeginDiveNoWarp),
+    SAVE_CODE(DoPlayerCurrent),
+};
+
+static saveable_data saveable_player_data[] =
+{
+    SAVE_DATA(Player),
+    SAVE_DATA(s_PlayerNinjaRun),
+    SAVE_DATA(sg_PlayerNinjaRun),
+    SAVE_DATA(s_PlayerNinjaStand),
+    SAVE_DATA(sg_PlayerNinjaStand),
+    SAVE_DATA(s_PlayerNinjaThrow),
+    SAVE_DATA(sg_PlayerNinjaThrow),
+    SAVE_DATA(s_PlayerNinjaJump),
+    SAVE_DATA(sg_PlayerNinjaJump),
+    SAVE_DATA(s_PlayerNinjaFall),
+    SAVE_DATA(sg_PlayerNinjaFall),
+    SAVE_DATA(s_PlayerNinjaClimb),
+    SAVE_DATA(sg_PlayerNinjaClimb),
+    SAVE_DATA(s_PlayerNinjaCrawl),
+    SAVE_DATA(sg_PlayerNinjaCrawl),
+    SAVE_DATA(s_PlayerNinjaSwim),
+    SAVE_DATA(sg_PlayerNinjaSwim),
+    SAVE_DATA(s_PlayerHeadFly),
+    SAVE_DATA(sg_PlayerHeadFly),
+    SAVE_DATA(s_PlayerHead),
+    SAVE_DATA(sg_PlayerHead),
+    SAVE_DATA(s_PlayerHeadHurl),
+    SAVE_DATA(sg_PlayerHeadHurl),
+    SAVE_DATA(s_PlayerDeath),
+    SAVE_DATA(sg_PlayerDeath),
+    SAVE_DATA(s_PlayerNinjaSword),
+    SAVE_DATA(sg_PlayerNinjaSword),
+    SAVE_DATA(s_PlayerNinjaPunch),
+    SAVE_DATA(sg_PlayerNinjaPunch),
+    SAVE_DATA(s_PlayerNinjaFly),
+    SAVE_DATA(sg_PlayerNinjaFly),
+};
+
+saveable_module saveable_player =
+{
+    // code
+    saveable_player_code,
+    SIZ(saveable_player_code),
+
+    // data
+    saveable_player_data,
+    SIZ(saveable_player_data)
+};
