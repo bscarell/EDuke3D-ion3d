@@ -4,11 +4,36 @@
 ;
 ; This file has been modified from Ken Silverman's original release
 ; by Jonathon Fowler (jf@jonof.id.au)
+; by the EDuke32 team (development@voidpoint.com)
+
+%ifidn __OUTPUT_FORMAT__, x64
+%define ASM_x86_64
+%elifidn __OUTPUT_FORMAT__, win64
+%define ASM_x86_64
+%elifidn __OUTPUT_FORMAT__, elf64
+%define ASM_x86_64
+%elifidn __OUTPUT_FORMAT__, macho64
+%define ASM_x86_64
+%elifidn __OUTPUT_FORMAT__, win32
+%define ASM_x86
+%elifidn __OUTPUT_FORMAT__, elf32
+%define ASM_x86
+%elifidn __OUTPUT_FORMAT__, macho32
+%define ASM_x86
+%elifidn __OUTPUT_FORMAT__, win
+%define ASM_x86
+%elifidn __OUTPUT_FORMAT__, elf
+%define ASM_x86
+%elifidn __OUTPUT_FORMAT__, macho
+%define ASM_x86
+%endif
+
+%ifdef ASM_x86
 
 ;CPU 586
 
 SECTION .text
-	
+
 %ifdef UNDERSCORES
 %define asm1 _asm1
 %define asm2 _asm2
@@ -25,8 +50,6 @@ SECTION .text
 %define bufplce _bufplce
 %define ebpbak _ebpbak
 %define espbak _espbak
-%define pow2char _pow2char
-%define pow2long _pow2long
 %define globaltilesizy _globaltilesizy
 
 %define sethlinesizes		_sethlinesizes
@@ -176,9 +199,6 @@ SECTION .text
 
 	EXTERN ebpbak
 	EXTERN espbak
-
-	EXTERN pow2char
-	EXTERN pow2long
 
 	EXTERN globaltilesizy
 
@@ -621,7 +641,7 @@ CDECLBEGINSET 1
 CDECLENDSET 1
 	ret
 
-	
+
 	ALIGN 16
 prosetupvlineasm:
 CDECLBEGINSET 1
@@ -653,7 +673,7 @@ CDECLBEGINSET 1
 CDECLENDSET 1
 	ret
 
-	
+
 	ALIGN 16
 setupmvlineasm:
     ;; NOTE: We actually receive two args (second one: saturate vplc?), but the
@@ -676,7 +696,7 @@ CDECLBEGINSET 1
 CDECLENDSET 1
 	ret
 
-	
+
 	ALIGN 16
 prevlineasm1:
 CDECLBEGINSET 6
@@ -685,7 +705,7 @@ CDECLBEGINSET 6
 
 	add eax, edx
 premach3a: shr edx, 32
-	mov dl, byte [esi+edx]
+	movzx edx, byte [esi+edx]
 	mov cl, byte [ebx+edx]
 	mov byte [edi], cl
 CDECLENDSET 6
@@ -708,7 +728,7 @@ beginvline:
 mach3a: shr ebx, 32
 fixchain1b: add edi, 320
 	; ... so that the upper 24 bits of ebx are clear here:
-	mov bl, byte [esi+ebx]
+	movzx ebx, byte [esi+ebx]
 	add edx, eax
 	dec ecx
 	mov bl, byte [ebp+ebx]
@@ -761,7 +781,7 @@ CDECLBEGINSET 6
 beginmvline:
 	mov ebx, edx
 maskmach3a: shr ebx, 32
-	mov bl, byte [esi+ebx]
+	movzx ebx, byte [esi+ebx]
 	cmp bl, 255
 	je short skipmask1
 maskmach3c: mov bl, [ebp+ebx]
@@ -893,7 +913,7 @@ ALIGN 16
 begintvline:
 	mov ebx, edx
 transmach3a: shr ebx, 32
-	mov bl, byte [esi+ebx]
+	movzx ebx, byte [esi+ebx]
 	cmp bl, 255
 	je short skiptrans1
 transrev0:
@@ -974,10 +994,10 @@ CDECLPARAM edi,1,5
 	mov ebx, dword [bufplce+4]
 	mov ecx, dword [bufplce+8]
 	mov edx, dword [bufplce+12]
-	mov dword [machvbuf1+2], ecx
-	mov dword [machvbuf2+2], edx
-	mov dword [machvbuf3+2], eax
-	mov dword [machvbuf4+2], ebx
+	mov dword [machvbuf1+3], ecx
+	mov dword [machvbuf2+3], edx
+	mov dword [machvbuf3+3], eax
+	mov dword [machvbuf4+3], ebx
 
 	mov eax, dword [palookupoffse]
 	mov ebx, dword [palookupoffse+4]
@@ -1052,8 +1072,8 @@ machvsh1: shr ecx, 88h				;32-sh
 machvsh2: and ebx, 00000088h			;(1<<sh)-1
 machvinc1: add edx, 88880000h
 machvinc2: adc esi, 88888088h
-machvbuf1: mov cl, byte [ecx+88888888h]
-machvbuf2: mov bl, byte [ebx+88888888h]
+machvbuf1: movzx ecx, byte [ecx+88888888h]
+machvbuf2: movzx ebx, byte [ebx+88888888h]
 	mov eax, ebp
 machvsh3: shr eax, 88h				;32-sh
 machvpal1: mov cl, byte [ecx+88888888h]
@@ -1062,9 +1082,9 @@ machvpal2: mov ch, byte [ebx+88888888h]
 	shl ecx, 16
 machvsh4: and ebx, 00000088h			;(1<<sh)-1
 machvinc3: add dl, 88h
-machvbuf3: mov al, byte [eax+88888888h]
+machvbuf3: movzx eax, byte [eax+88888888h]
 machvinc4: adc dh, 88h
-machvbuf4: mov bl, byte [ebx+88888888h]
+machvbuf4: movzx ebx, byte [ebx+88888888h]
 machvinc5: adc ebp, 88888088h
 machvpal3: mov cl, byte [eax+88888888h]
 machvpal4: mov ch, byte [ebx+88888888h]
@@ -1272,12 +1292,12 @@ CDECLPARAM edi,1,5
 
 	mov eax, dword [bufplce]
 	mov ebx, dword [bufplce+4]
-	mov dword [machmv1+2], eax
-	mov dword [machmv4+2], ebx
+	mov dword [machmv1+3], eax
+	mov dword [machmv4+3], ebx
 	mov eax, dword [bufplce+8]
 	mov ebx, dword [bufplce+12]
-	mov dword [machmv7+2], eax
-	mov dword [machmv10+2], ebx
+	mov dword [machmv7+3], eax
+	mov dword [machmv10+3], ebx
 
 	mov eax, dword [palookupoffse]
 	mov ebx, dword [palookupoffse+4]
@@ -1322,8 +1342,8 @@ machmv16: shr eax, 32
 machmv15: shr ebx, 32
 machmv12: add ebp, 88888888h			;vince[3]
 machmv9: add esi, 88888888h			;vince[2]
-machmv10: mov al, byte [eax+88888888h]		;bufplce[3]
-machmv7: mov bl, byte [ebx+88888888h]		;bufplce[2]
+machmv10: movzx eax, byte [eax+88888888h]		;bufplce[3]
+machmv7: movzx ebx, byte [ebx+88888888h]		;bufplce[2]
 	cmp al, 255
 	adc dl, dl
 	cmp bl, 255
@@ -1334,7 +1354,7 @@ machmv11: mov bh, byte [eax+88888888h]		;palookupoffs[3]
 	mov eax, edx
 machmv14: shr eax, 32
 	shl ebx, 16
-machmv4: mov al, byte [eax+88888888h]		;bufplce[1]
+machmv4: movzx eax, byte [eax+88888888h]		;bufplce[1]
 	cmp al, 255
 	adc dl, dl
 machmv6: add edx, 88888888h			;vince[1]
@@ -1343,7 +1363,7 @@ machmv5: mov bh, byte [eax+88888888h]		;palookupoffs[1]
 	mov eax, ecx
 machmv13: shr eax, 32
 machmv3: add ecx, 88888888h			;vince[0]
-machmv1: mov al, byte [eax+88888888h]		;bufplce[0]
+machmv1: movzx eax, byte [eax+88888888h]		;bufplce[0]
 	cmp al, 255
 	adc dl, dl
 machmv2: mov bl, byte [eax+88888888h]		;palookupoffs[0]
@@ -1450,7 +1470,7 @@ ALIGN 16
 mvcase15:
 	mov dword [edi], ebx
 	jmp beginmvlineasm4
-	
+
 
 	ALIGN 16
 setupspritevline:
@@ -1634,7 +1654,7 @@ CDECLBEGINSET 2
 CDECLENDSET 2
 	ret
 
-	
+
 	ALIGN 16
 mhline:
 CDECLBEGINSET 6
@@ -1665,7 +1685,7 @@ CDECLBEGINSET 6
 	mov dword [mmach8d+2], eax
 	jmp short mhlineskipmodify_nosetup
 
-	
+
 	ALIGN 16
 mhlineskipmodify:
 CDECLBEGINSET 6
@@ -1748,7 +1768,7 @@ mendhline:
 CDECLENDSET 6
 	ret
 
-	
+
 	ALIGN 16
 tsethlineshift:
 CDECLBEGINSET 2
@@ -1762,7 +1782,7 @@ CDECLBEGINSET 2
 CDECLENDSET 2
 	ret
 
-	
+
 	ALIGN 16
 thline:
 CDECLBEGINSET 6
@@ -1909,8 +1929,8 @@ CDECLBEGINSET 6
 	mov eax, dword [asm1]
 	mov dword [tran2incb+2], eax
 
-	mov dword [tran2bufa+2], ecx		;bufplc1
-	mov dword [tran2bufb+2], edx		;bufplc2
+	mov dword [tran2bufa+3], ecx		;bufplc1
+	mov dword [tran2bufb+3], edx		;bufplc2
 
 	mov eax, dword [asm2]
 	sub edi, eax
@@ -1953,7 +1973,7 @@ skipdraw1:
 	cmp dl, 255
 	jne short skipdraw3
 fixchaint2b: add edi, 320
-	jc short endtvline2
+	jc endtvline2
 
 begintvline2:
 	mov eax, esi
@@ -1962,9 +1982,9 @@ tran2shra: shr eax, 88h				;globalshift
 tran2shrb: shr ebx, 88h				;globalshift
 tran2inca: add esi, 88888888h			;vinc1
 tran2incb: add ebp, 88888888h			;vinc2
-tran2bufa: mov cl, byte [eax+88888888h]		;bufplc1
+tran2bufa: movzx ecx, byte [eax+88888888h]		;bufplc1
 	cmp cl, 255
-tran2bufb: mov dl, byte [ebx+88888888h]		;bufplc2
+tran2bufb: movzx edx, byte [ebx+88888888h]		;bufplc2
 	je short skipdraw1
 	cmp dl, 255
 	je short skipdraw2
@@ -2115,7 +2135,7 @@ CDECLBEGINSET 3
 CDECLENDSET 3
 	ret
 
-	
+
 	ALIGN 16
 slopevlin:
 CDECLBEGINSET 6
@@ -2345,7 +2365,7 @@ endrhline:
 CDECLENDSET 6
 	ret
 
-	
+
 	ALIGN 16
 setuprmhlineasm4:
 CDECLBEGINSET 6
@@ -2357,7 +2377,7 @@ CDECLBEGINSET 6
 CDECLENDSET 6
 	ret
 
-	
+
 	ALIGN 16
 rmhlineasm4:
 CDECLBEGINSET 6
@@ -2514,7 +2534,7 @@ CDECLBEGINSET 2
 CDECLENDSET 2
 	ret
 
-	
+
 	ALIGN 16
 drawslab:
 CDECLBEGINSET 6
@@ -2894,3 +2914,5 @@ pentiumpro:
 	ret
 
 dep_end:
+
+%endif
